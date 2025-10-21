@@ -74,6 +74,23 @@ function fsbhoa_lighting_enqueue_scripts() {
         wp_enqueue_script( 'fsbhoa-schedules-manager', plugin_dir_url( __FILE__ ) . 'assets/js/schedules-manager.js', array(), '1.0.0', true );
         wp_localize_script( 'fsbhoa-schedules-manager', 'fsbhoa_lighting_data', array( 'rest_url' => rest_url(), 'nonce' => wp_create_nonce( 'wp_rest' ) ) );
     }
+
+    // --- For the monitor page ---
+    if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_status_monitor' ) ) {
+        wp_enqueue_script(
+            'fsbhoa-monitor-manager', // New unique handle
+            plugin_dir_url( __FILE__ ) . 'assets/js/monitor-manager.js', // Path to the new file
+            array(), '1.0.0', true
+        );
+        wp_localize_script(
+            'fsbhoa-monitor-manager', // Must match the handle above
+            'fsbhoa_lighting_data',
+            array(
+                'rest_url' => rest_url(),
+                'nonce'    => wp_create_nonce( 'wp_rest' )
+            )
+        );
+    }
 }
 add_action( 'wp_enqueue_scripts', 'fsbhoa_lighting_enqueue_scripts' );
 

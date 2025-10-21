@@ -1,12 +1,9 @@
 <?php defined( 'ABSPATH' ) or die( 'Unauthorized Access' ); ?>
 
-<style>
-    /* ... (styles for the monitor page) ... */
-</style>
-
-<div class="lighting-monitor-wrapper">
-    <h3>Live Lighting Status</h3>
-    <p>The current status of each lighting zone will be displayed here.</p>
-    <div id="lighting-status-container">
-        </div>
+<div class="wrap" id="fsbhoa-monitor-app">
+    <h1>Live Lighting Status</h1>
+    
+    <div id="status-container">
+        <p>Loading status...</p>
+    </div>
 </div>
