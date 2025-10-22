@@ -57,37 +57,46 @@ document.addEventListener('DOMContentLoaded', function () {
             `;
         };
 
-        const renderSpanRow = (span = {}) => {
-            const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            const dayCheckboxes = days.map(day => {
-                const isChecked = span.days_of_week && span.days_of_week.includes(day);
-                return `<label style="margin-right: 10px;"><input type="checkbox" name="days_of_week" value="${day}" ${isChecked ? 'checked' : ''}> ${day}</label>`;
-            }).join('');
+// Helper function to render a single time span row
+    const renderSpanRow = (span = {}) => {
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const dayCheckboxes = days.map(day => {
+            const isChecked = span.days_of_week && span.days_of_week.includes(day);
+            return `<label title="${day}" style="margin: 0 4px; font-size: 0.9em; white-space: nowrap;"><input type="checkbox" name="days_of_week" value="${day}" ${isChecked ? 'checked' : ''}>${day.substring(0,1)}</label>`;
+        }).join('');
 
-            return `
-                <div class="schedule-span-row" style="margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; background: #f9f9f9; border-radius: 4px;">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                        <div>
-                            <select name="on_trigger">
-                                <option value="SUNDOWN" ${span.on_trigger === 'SUNDOWN' ? 'selected' : ''}>At Sundown</option>
-                                <option value="TIME" ${span.on_trigger === 'TIME' ? 'selected' : ''}>At Time</option>
-                            </select>
-                            <input type="time" name="on_time" value="${span.on_time ? span.on_time.substring(0, 5) : ''}" style="margin-left: 5px; ${span.on_trigger !== 'TIME' ? 'display:none;' : ''}">
-                            <span style="margin: 0 10px;">to</span>
-                            <select name="off_trigger">
-                                <option value="SUNRISE" ${span.off_trigger === 'SUNRISE' ? 'selected' : ''}>At Sunrise</option>
-                                <option value="TIME" ${span.off_trigger === 'TIME' ? 'selected' : ''}>At Time</option>
-                            </select>
-                            <input type="time" name="off_time" value="${span.off_time ? span.off_time.substring(0, 5) : ''}" style="margin-left: 5px; ${span.off_trigger !== 'TIME' ? 'display:none;' : ''}">
-                        </div>
-                        <button type="button" class="button remove-span-btn">&times;</button>
-                    </div>
-                    <div class="days-of-week" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee;">
-                        ${dayCheckboxes}
-                    </div>
+        // Define styles for compact controls
+        const controlStyle = "padding: 2px 4px; font-size: 0.9em; height: auto; line-height: normal;";
+
+        return `
+            <div class="schedule-span-row" style="margin-bottom: 10px; padding: 10px; border: 1px solid #ddd; background: #f9f9f9; border-radius: 4px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+                
+                <div class="days-of-week" style="border-right: 1px solid #eee; padding-right: 8px; white-space: nowrap;">
+                   <span style="font-weight: bold; margin-right: 5px;">Days:</span> ${dayCheckboxes}
                 </div>
-            `;
-        };
+
+                <div style="display: flex; align-items: center; gap: 4px;">
+                    <span style="font-weight: bold;">On:</span>
+                    <select name="on_trigger" style="flex-shrink: 0; width: 100px; ${controlStyle}">
+                        <option value="SUNDOWN" ${span.on_trigger === 'SUNDOWN' ? 'selected' : ''}>Sundown</option>
+                        <option value="TIME" ${span.on_trigger === 'TIME' ? 'selected' : ''}>Time</option>
+                    </select>
+                    <input type="time" name="on_time" value="${span.on_time ? span.on_time.substring(0, 5) : ''}" style="${span.on_trigger !== 'TIME' ? 'display:none;' : ''} ${controlStyle}">
+                </div>
+                
+                <div style="display: flex; align-items: center; gap: 4px;">
+                     <span style="font-weight: bold;">Off:</span>
+                    <select name="off_trigger" style="flex-shrink: 0; width: 100px; ${controlStyle}">
+                        <option value="SUNRISE" ${span.off_trigger === 'SUNRISE' ? 'selected' : ''}>Sunrise</option>
+                        <option value="TIME" ${span.off_trigger === 'TIME' ? 'selected' : ''}>Time</option>
+                    </select>
+                    <input type="time" name="off_time" value="${span.off_time ? span.off_time.substring(0, 5) : ''}" style="${span.off_trigger !== 'TIME' ? 'display:none;' : ''} ${controlStyle}">
+                 </div>
+
+                <button type="button" class="button remove-span-btn" style="margin-left: auto; padding: 0 8px; line-height: 1.5;">&times;</button> 
+            </div>
+        `;
+    };
         
         const renderForm = (schedule = { spans: [] }) => {
             const title = schedule.id ? 'Edit Schedule' : 'Add New Schedule';
@@ -199,72 +208,4 @@ document.addEventListener('DOMContentLoaded', function () {
         loadSchedules();
     }
 
-    // =================================================================
-    // ASSIGNMENTS MANAGER
-    // =================================================================
-    const assignmentsApp = document.getElementById('fsbhoa-assignments-app');
-    if (assignmentsApp) {
-        const assignmentsContainer = assignmentsApp.querySelector('#assignments-container');
-        const assignmentsApi = {
-            get: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/assignments', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } }),
-            save: (data) => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/assignments', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': fsbhoa_lighting_data.nonce },
-                body: JSON.stringify(data)
-            }),
-            getZones: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/zones', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } }),
-            getSchedules: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/schedules', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } })
-        };
-
-        const renderAssignmentsTable = (zones, schedules, assignments) => {
-            const rows = zones.map(zone => {
-                const assignedScheduleId = assignments[zone.id] || 0;
-                return `
-                    <tr>
-                        <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
-                        <td>
-                            <select class="zone-schedule-select" data-zone-id="${zone.id}" style="width: 100%;">
-                                <option value="0">-- None --</option>
-                                ${schedules.map(s => `<option value="${s.id}" ${assignedScheduleId == s.id ? 'selected' : ''}>${escapeHTML(s.schedule_name)}</option>`).join('')}
-                            </select>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-            assignmentsContainer.innerHTML = `
-                <table class="wp-list-table widefat striped">
-                    <thead><tr><th style="width: 30%;">Zone</th><th>Assigned Schedule</th></tr></thead>
-                    <tbody>${rows}</tbody>
-                </table>
-                <button id="save-assignments-btn" class="button button-primary" style="margin-top: 20px;">Save All Assignments</button>
-            `;
-        };
-
-        const loadAssignments = async () => {
-            try {
-                const [zonesRes, schedulesRes, assignmentsRes] = await Promise.all([assignmentsApi.getZones(), assignmentsApi.getSchedules(), assignmentsApi.get()]);
-                const zones = await zonesRes.json();
-                const schedules = await schedulesRes.json();
-                const assignments = await assignmentsRes.json();
-                renderAssignmentsTable(zones, schedules, assignments);
-            } catch (error) { console.error('Error loading assignments:', error); }
-        };
-
-        assignmentsApp.addEventListener('click', async e => {
-            if (e.target.matches('#save-assignments-btn')) {
-                e.preventDefault();
-                const selects = assignmentsApp.querySelectorAll('.zone-schedule-select');
-                for (const select of selects) {
-                    await assignmentsApi.save({
-                        zone_id: select.dataset.zoneId,
-                        schedule_id: select.value
-                    });
-                }
-                alert('All assignments saved successfully!');
-                loadAssignments();
-            }
-        });
-
-        loadAssignments();
-    }
 });

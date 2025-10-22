@@ -30,39 +30,34 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const rows = zoneData.map(zone => {
             let isZoneOn = false;
-            let firstOnOutput = null; // Store the name of the first ON output for status check
+            let firstOnOutput = null;
 
+            // Determine zone state (existing logic)
             if (zone.mapping_ids && zone.mapping_ids.length > 0) {
-                 // Find the first mapping associated with the zone
-                 const mapping = mappingData.find(m => m.id == zone.mapping_ids[0]);
-                 if (mapping && mapping.plc_outputs) {
+                const firstMappingId = zone.mapping_ids[0];
+                const mapping = mappingData.find(m => m.id == firstMappingId);
+                if (mapping && mapping.plc_outputs) {
                     try {
                         const outputs = JSON.parse(mapping.plc_outputs);
-                        if (outputs.length > 0) {
-                            firstOnOutput = outputs[0]; // Assume first output is the 'ON' output
-                        }
+                        if (outputs.length > 0) firstOnOutput = outputs[0];
                     } catch (e) { console.error("Error parsing mapping outputs:", mapping.plc_outputs); }
-                 }
+                }
             }
-
-            // Check the status object for the state of the first 'ON' output
-            if (firstOnOutput && status[firstOnOutput] === true) {
-                 isZoneOn = true;
-            }
+            if (firstOnOutput && status[firstOnOutput] === true) isZoneOn = true;
 
             const statusText = isZoneOn ? '<span style="color: green; font-weight: bold;">ON</span>' : '<span style="color: #666;">OFF</span>';
-
-            // Disable the button corresponding to the current state
-            const onButtonDisabled = isZoneOn ? 'disabled' : '';
-            const offButtonDisabled = !isZoneOn ? 'disabled' : '';
-
+    
+            // --- Apply CSS classes for icon state and disabled status ---
+            const onLinkClasses = `override-link dashicons dashicons-lightbulb ${isZoneOn ? 'is-disabled' : ''}`;
+            const offLinkClasses = `override-link dashicons dashicons-lightbulb is-off ${!isZoneOn ? 'is-disabled' : ''}`; // Add 'is-off' class
+    
             return `
                 <tr>
                     <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
                     <td>${statusText}</td>
                     <td>
-                        <button class="button override-btn" data-zone-id="${zone.id}" data-state="on" ${onButtonDisabled}>ON</button>
-                        <button class="button override-btn" data-zone-id="${zone.id}" data-state="off" ${offButtonDisabled}>OFF</button>
+                        <a href="#" class="${onLinkClasses}" data-zone-id="${zone.id}" data-state="on" title="Turn ON"></a>
+                        <a href="#" class="${offLinkClasses}" data-zone-id="${zone.id}" data-state="off" title="Turn OFF"></a>
                     </td>
                 </tr>
             `;
@@ -71,19 +66,20 @@ document.addEventListener('DOMContentLoaded', function () {
         const photocellStatus = status['Photocell'] === true
             ? '<span style="color: #333; font-weight: bold;">DARK</span> (Lights enabled)'
             : '<span style="color: orange; font-weight: bold;">LIGHT</span> (Lights disabled by daylight)';
-
+    
         statusContainer.innerHTML = `
             <p>Status updates automatically every 5 seconds.</p>
-            <table class="wp-list-table widefat striped fixed" style="margin-top:20px;">
+            <table class="wp-list-table widefat striped fixed" style="margin-top:10px;">
                 <thead><tr><th style="width: 40%;">Zone</th><th style="width: 20%;">Current State</th><th>Manual Override</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
-            <div style="margin-top: 20px; font-size: 1.1em;">
+            <div style="margin-top: 15px; font-size: 1.1em;">
                 <strong>Photocell Status:</strong> ${photocellStatus}
             </div>
             <div id="override-status" style="margin-top: 10px; font-style: italic;"></div>
         `;
     };
+
 
     const updateStatus = async (forceConfigLoad = false) => {
         if (isUpdating) return; // Prevent overlapping updates

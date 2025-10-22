@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const listContainer = zoneApp.querySelector('#zones-list-container');
         const formContainer = zoneApp.querySelector('#zone-form-container');
         const addNewBtn = zoneApp.querySelector('#add-new-zone-btn');
+        let allSchedules = []; // Store schedules globally for this app section
 
         const zoneApi = {
             get: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/zones', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } }),
@@ -22,44 +23,72 @@ document.addEventListener('DOMContentLoaded', function () {
                 headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce }
             })
         };
-        
         const mappingApi = {
             get: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/mappings', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } })
         };
+        const scheduleApi = {
+            get: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/schedules', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } })
+        };
+        const assignmentApi = {
+            saveAll: (data) => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/zone-assignments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-WP-Nonce': fsbhoa_lighting_data.nonce },
+                body: JSON.stringify(data)
+            })
+        };
 
         const renderZonesTable = (zones) => {
-            const tableRows = zones.map(zone => `
-                <tr>
-                    <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
-                    <td>${escapeHTML(zone.description)}</td>
-                    <td>
-                        <a href="#" class="edit-zone-link" data-zone-id="${zone.id}">Edit</a> |
-                        <a href="#" class="delete-zone-link" data-zone-id="${zone.id}" style="color: #b32d2e;">Delete</a>
-                    </td>
-                </tr>
-            `).join('');
+            const scheduleOptionsHTML = allSchedules.map(s => `<option value="${s.id}">${escapeHTML(s.schedule_name)}</option>`).join('');
+
+            const tableRows = zones.map(zone => {
+                const assignedScheduleId = zone.schedule_id || 0;
+                return `
+                    <tr>
+                        <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
+                        <td>${escapeHTML(zone.description)}</td>
+                        <td>
+                            <select class="zone-schedule-select" data-zone-id="${zone.id}" style="width: 100%;">
+                                <option value="0">-- None --</option>
+                                ${allSchedules.map(s => `<option value="${s.id}" ${assignedScheduleId == s.id ? 'selected' : ''}>${escapeHTML(s.schedule_name)}</option>`).join('')}
+                            </select>
+                        </td>
+                        <td>
+                            <a href="#" class="edit-zone-link" data-zone-id="${zone.id}">Edit Details</a> |
+                            <a href="#" class="delete-zone-link" data-zone-id="${zone.id}" style="color: #b32d2e;">Delete</a>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
 
             listContainer.innerHTML = `
-                <table class="wp-list-table widefat striped">
-                    <thead><tr><th style="width: 30%;">Zone Name</th><th>Description</th><th style="width: 15%;">Actions</th></tr></thead>
+                <table class="wp-list-table widefat striped fixed">
+                    <thead><tr><th style="width: 25%;">Zone Name</th><th>Description</th><th style="width: 25%;">Assigned Schedule</th><th style="width: 15%;">Actions</th></tr></thead>
                     <tbody>${tableRows}</tbody>
                 </table>
+                <button id="save-zone-assignments-btn" class="button button-primary" style="margin-top: 20px;">Save Schedule Assignments</button>
             `;
         };
 
-const renderZoneForm = async (zone = {}) => {
+        const renderZoneForm = async (zone = {}) => {
             const isEditing = !!zone.id;
             const title = isEditing ? 'Edit Zone' : 'Add New Zone';
-            
-            // Fetch all zones and all mappings at the same time
+
+            // Fetch necessary data
             const [zonesResponse, mappingsResponse] = await Promise.all([ zoneApi.get(), mappingApi.get() ]);
+            if (!zonesResponse.ok || !mappingsResponse.ok) {
+                 console.error("Failed to load data for form");
+                 formContainer.innerHTML = '<p style="color: red;">Error loading form data.</p>';
+                 listContainer.style.display = 'none';
+                 addNewBtn.style.display = 'none';
+                 formContainer.style.display = 'block';
+                 return;
+            }
             const allZones = await zonesResponse.json();
             const allMappings = await mappingsResponse.json();
-            
+
+            // Build checklist
             const mappingsChecklistHTML = allMappings.map(map => {
                 const isChecked = zone.mapping_ids && zone.mapping_ids.includes(map.id.toString());
-                
-                // Check if this mapping is used by any OTHER zone
                 let isDisabled = false;
                 let assignedToZoneName = '';
                 for (const otherZone of allZones) {
@@ -74,29 +103,38 @@ const renderZoneForm = async (zone = {}) => {
                 const labelStyle = isDisabled ? 'style="color: #999; cursor: not-allowed;"' : '';
                 const tooltip = isDisabled ? `title="Already assigned to zone: '${escapeHTML(assignedToZoneName)}'"` : '';
 
-                return `<label ${labelStyle} ${tooltip}><input type="checkbox" name="mapping_ids[]" value="${map.id}" ${isChecked ? 'checked' : ''} ${disabledAttr}> Controller ${map.plc_id}: ${escapeHTML(map.description)} (Outputs: ${JSON.parse(map.plc_outputs).join(', ')})</label><br>`;
+                return `<label ${labelStyle} ${tooltip} style="display: block; margin-bottom: 5px;"><input type="checkbox" name="mapping_ids[]" value="${map.id}" ${isChecked ? 'checked' : ''} ${disabledAttr}> Controller ${map.plc_id}: ${escapeHTML(map.description)} (Outputs: ${JSON.parse(map.plc_outputs).join(', ')})</label>`;
             }).join('');
 
+            // HTML Form with Compact Layout
             formContainer.innerHTML = `
                 <h2>${title}</h2>
                 <form id="zone-form">
                     <input type="hidden" name="zone_id" value="${zone.id || 0}">
                     <table class="form-table">
-                        <tr valign="top">
-                            <th scope="row"><label for="zone_name">Zone Name</label></th>
-                            <td><input type="text" id="zone_name" name="zone_name" class="regular-text" value="${escapeHTML(zone.zone_name || '')}" required></td>
-                        </tr>
-                        <tr valign="top">
-                            <th scope="row"><label for="description">Description</label></th>
-                            <td><textarea id="description" name="description" class="large-text" rows="4">${escapeHTML(zone.description || '')}</textarea></td>
-                        </tr>
-                        <tr valign="top">
-                            <th scope="row">Assign PLC Output Mappings</th>
-                            <td>${mappingsChecklistHTML || 'No mappings defined yet. Please add mappings below first.'}</td>
-                        </tr>
+                        <tbody>
+                            <tr class="form-field form-required">
+                                <th scope="row"><label for="zone_name">Zone Name</label></th>
+                                <td><input name="zone_name" type="text" id="zone_name" value="${escapeHTML(zone.zone_name || '')}" class="regular-text" required aria-required="true"></td>
+                            </tr>
+                            <tr class="form-field">
+                                <th scope="row"><label for="description">Description</label></th>
+                                <td><textarea name="description" id="description" rows="3" class="large-text">${escapeHTML(zone.description || '')}</textarea></td>
+                            </tr>
+                            <tr class="form-field">
+                                <th scope="row">Assign PLC Output Mappings</th>
+                                <td style="padding-top: 10px;">
+                                    <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; background: #fff;">
+                                        ${mappingsChecklistHTML || 'No mappings defined yet. Please add mappings below first.'}
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
                     </table>
-                    <button type="submit" class="button button-primary">Save Zone</button>
-                    <button type="button" class="button" id="cancel-edit-btn">Cancel</button>
+                    <p class="submit">
+                        <button type="submit" class="button button-primary">Save Zone</button>
+                        <button type="button" class="button" id="cancel-edit-btn" style="margin-left: 10px;">Cancel</button>
+                    </p>
                 </form>
             `;
             listContainer.style.display = 'none';
@@ -104,18 +142,28 @@ const renderZoneForm = async (zone = {}) => {
             formContainer.style.display = 'block';
         };
 
-        const loadZones = async () => {
+        const loadZonesAndSchedules = async () => {
             try {
-                const response = await zoneApi.get();
-                const zones = await response.json();
-                renderZonesTable(zones);
-            } catch (error) { console.error('Error loading zones:', error); }
+                const schedulesRes = await scheduleApi.get();
+                if (!schedulesRes.ok) throw new Error('Failed to load schedules');
+                allSchedules = await schedulesRes.json();
+
+                const zonesRes = await zoneApi.get();
+                if (!zonesRes.ok) throw new Error('Failed to load zones');
+                const zones = await zonesRes.json();
+                
+                renderZonesTable(zones); 
+
+            } catch (error) { 
+                console.error('Error loading initial data:', error); 
+                listContainer.innerHTML = '<p style="color: red;">Error loading configuration data. Check console.</p>';
+            }
         };
 
         addNewBtn.addEventListener('click', (e) => { e.preventDefault(); renderZoneForm(); });
 
         zoneApp.addEventListener('click', async (e) => {
-            if (e.target.matches('.edit-zone-link, .delete-zone-link, #cancel-edit-btn')) {
+            if (e.target.matches('.edit-zone-link, .delete-zone-link, #cancel-edit-btn, #save-zone-assignments-btn')) {
                 e.preventDefault();
             }
             if (e.target.matches('.edit-zone-link')) {
@@ -128,12 +176,26 @@ const renderZoneForm = async (zone = {}) => {
                 const zoneId = e.target.dataset.zoneId;
                 if (confirm('Are you sure?')) {
                     await zoneApi.delete(zoneId);
-                    loadZones();
+                    loadZonesAndSchedules(); // Reload both lists after delete
                 }
             } else if (e.target.matches('#cancel-edit-btn')) {
                 formContainer.style.display = 'none';
                 listContainer.style.display = 'block';
                 addNewBtn.style.display = 'inline-block';
+            } else if (e.target.matches('#save-zone-assignments-btn')) {
+                const assignments = {};
+                zoneApp.querySelectorAll('.zone-schedule-select').forEach(select => {
+                    assignments[select.dataset.zoneId] = select.value;
+                });
+                try {
+                    const response = await assignmentApi.saveAll(assignments);
+                    if (!response.ok) throw new Error('Failed to save assignments');
+                    alert('Schedule assignments saved successfully!');
+                    loadZonesAndSchedules(); // Refresh list
+                } catch(error) {
+                    console.error('Error saving assignments:', error);
+                    alert('Error saving assignments.');
+                }
             }
         });
 
@@ -147,15 +209,15 @@ const renderZoneForm = async (zone = {}) => {
                 formContainer.style.display = 'none';
                 listContainer.style.display = 'block';
                 addNewBtn.style.display = 'inline-block';
-                loadZones();
+                loadZonesAndSchedules(); // Reload both lists after save
             }
         });
 
-        loadZones();
+        loadZonesAndSchedules();
     }
 
     // =================================================================
-    // PLC OUTPUT MAPPING MANAGER
+    // PLC OUTPUT MAPPING MANAGER (Unchanged - Ensure this is the correct final version)
     // =================================================================
     const mappingApp = document.getElementById('fsbhoa-mapping-manager-app');
     if (mappingApp) {

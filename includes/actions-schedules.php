@@ -15,11 +15,6 @@ function fsbhoa_schedules_register_rest_routes() {
         ['methods' => 'DELETE', 'callback' => 'fsbhoa_lighting_delete_schedule', 'permission_callback' => function () { return current_user_can( 'manage_options' ); }],
     ] );
 
-    // Endpoints for Assignments
-    register_rest_route( 'fsbhoa-lighting/v1', '/assignments', [
-        ['methods' => 'GET', 'callback' => 'fsbhoa_lighting_get_assignments', 'permission_callback' => function () { return current_user_can( 'manage_options' ); }],
-        ['methods' => 'POST', 'callback' => 'fsbhoa_lighting_save_assignments', 'permission_callback' => function () { return current_user_can( 'manage_options' ); }],
-    ] );
 }
 add_action( 'rest_api_init', 'fsbhoa_schedules_register_rest_routes' );
 
