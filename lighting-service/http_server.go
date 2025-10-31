@@ -17,27 +17,33 @@ type App struct {
 // RunServer starts the main HTTP server.
 func (app *App) RunServer() error {
 	router := httprouter.New()
-	router.POST("/sync", app.handleSync)
+	// Renamed handler to clarify it just *triggers* the sync now
+	router.POST("/sync", app.handleSyncTrigger)
 	router.POST("/override/zone/:id/:state", app.handleOverride)
 	router.GET("/status", app.handleStatus)
 
-	return http.ListenAndServe(":8085", router)
+	// Use ListenPort from config
+	return http.ListenAndServe(app.Config.ListenPort, router)
 }
 
-// handleSync is triggered by WordPress when a configuration changes.
-func (app *App) handleSync(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	log.Println("Received /sync request. Fetching config and pushing to PLCs.")
+// handleSyncTrigger is triggered by WordPress when config changes.
+// It will fetch the *latest* config from WP and push it.
+func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log.Println("Received /sync trigger. Fetching latest config from WordPress API and pushing to PLCs.")
 
-	configData, err := FetchConfiguration(app.Config)
+	// Fetch the full configuration from WordPress API
+	configData, err := FetchConfigurationFromAPI(app.Config) // NEW function call
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Error fetching config from API: %v", err)
+		http.Error(w, "Failed to fetch config from WordPress", http.StatusInternalServerError)
 		return
 	}
 
 	// Translate the config into PLC data and push it.
-	err = PushConfigurationToPLCs(app.Config, configData)
+	err = PushConfigurationToPLCs(app.Config, configData) // Existing function call
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Printf("Error pushing config to PLCs: %v", err)
+		http.Error(w, "Failed to push config to PLCs", http.StatusInternalServerError)
 		return
 	}
 
@@ -45,13 +51,21 @@ func (app *App) handleSync(w http.ResponseWriter, r *http.Request, _ httprouter.
 	w.Write([]byte("Sync successful."))
 }
 
-// handleOverride is triggered by the UI for a manual override.
+// handleOverride needs the config to know which outputs to pulse.
 func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	zoneID, _ := strconv.Atoi(ps.ByName("id"))
 	state := ps.ByName("state") // "on" or "off"
 	log.Printf("Received override request for Zone %d to state %s", zoneID, state)
 
-	err := PulseZone(app.Config, zoneID, state)
+	// Fetch the config *each time* an override happens to ensure we have the latest mappings.
+	configData, err := FetchConfigurationFromAPI(app.Config)
+	if err != nil {
+		log.Printf("Error fetching config for override: %v", err)
+		http.Error(w, "Failed to fetch config for override", http.StatusInternalServerError)
+		return
+	}
+
+	err = PulseZone(app.Config, configData, zoneID, state) // Pass configData
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -59,18 +73,24 @@ func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httpro
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleStatus is triggered by the monitor page.
+// handleStatus needs the config to know which outputs/inputs to read.
 func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	log.Println("Received /status request. Polling PLCs.")
-	
-	// This function will need to get the full config to know what to read.
-	status, err := ReadStatusFromPLCs(app.Config)
+	log.Println("Received /status request. Fetching config and polling PLCs.")
+
+	// Fetch the config *each time* status is requested.
+	configData, err := FetchConfigurationFromAPI(app.Config)
+	if err != nil {
+		log.Printf("Error fetching config for status: %v", err)
+		http.Error(w, "Failed to fetch config for status", http.StatusInternalServerError)
+		return
+	}
+
+	status, err := ReadStatusFromPLCs(app.Config, configData) // Pass configData
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
-

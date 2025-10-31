@@ -18,11 +18,34 @@ require_once plugin_dir_path( __FILE__ ) . 'includes/shortcodes.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/actions-configuration.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/actions-schedules.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/actions-monitor.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/admin-settings.php';
 
 /**
  * Create/update the custom database tables on plugin activation.
  */
 function fsbhoa_lighting_activate() {
+    // --- Check for required PHP extensions ---
+    $required_extensions = ['mysqli', 'json', 'imagick', 'gd', 'intl'];
+    $missing_extensions = [];
+    foreach ($required_extensions as $ext) {
+        if (!extension_loaded($ext)) {
+            $missing_extensions[] = 'php-' . $ext; // Use common package names
+        }
+    }
+
+    if (!empty($missing_extensions)) {
+        // Deactivate the plugin immediately
+        deactivate_plugins( plugin_basename( __FILE__ ) );
+        // Display an error message to the admin
+        wp_die(
+            'FSBHOA Lighting Control plugin requires the following PHP extensions to be installed: ' .
+            implode(', ', $missing_extensions) .
+            '. Please install them (e.g., using "sudo apt install ...") and try activating again.',
+            'Plugin Activation Error',
+            array( 'back_link' => true )
+        );
+        return; // Stop activation
+    }
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
     require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
@@ -63,6 +86,9 @@ register_activation_hook( __FILE__, 'fsbhoa_lighting_activate' );
  * Enqueue the JavaScript files for our applications.
  */
 function fsbhoa_lighting_enqueue_scripts() {
+    // Force-load jQuery on the frontend to fix theme dependency issues.
+    wp_enqueue_script('jquery');
+
     // For the configuration page
     if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_configuration' ) ) {
         wp_enqueue_script( 'fsbhoa-zone-manager', plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager.js', array(), '1.0.0', true );
@@ -109,9 +135,11 @@ add_action( 'template_redirect', 'fsbhoa_require_admin_globally' );
 /**
  * Adds a phpMyAdmin link to the WordPress Admin Bar.
  */
-function fsbhoa_lighting_add_admin_bar_link( $wp_admin_bar ) {
-    if ( ! current_user_can( 'manage_options' ) ) { return; }
-    $args = array( 'id' => 'phpmyadmin-link', 'title' => 'phpMyAdmin', 'href'  => site_url( '/phpmyadmin' ), 'meta'  => array( 'target' => '_blank' ) );
-    $wp_admin_bar->add_node( $args );
-}
-add_action( 'admin_bar_menu', 'fsbhoa_lighting_add_admin_bar_link', 999 );
+// function fsbhoa_lighting_add_admin_bar_link( $wp_admin_bar ) {
+//     if ( ! current_user_can( 'manage_options' ) ) { return; }
+//     $args = array( 'id' => 'phpmyadmin-link', 'title' => 'phpMyAdmin', 'href'  => site_url( '/phpmyadmin' ), 'meta'  => array( 'target' => '_blank' ) );
+//     $wp_admin_bar->add_node( $args );
+// }
+// add_action( 'admin_bar_menu', 'fsbhoa_lighting_add_admin_bar_link', 999 );
+
+

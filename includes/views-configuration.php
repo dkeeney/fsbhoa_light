@@ -12,6 +12,14 @@
         <a href="#" id="add-new-zone-btn" class="page-title-action">Add New Zone</a>
         <div id="zones-list-container"></div>
         <div id="zone-form-container" style="display: none;"></div>
+        <button id="save-zone-assignments-btn" class="button button-primary" style="margin-top: 20px; display: none;">Save Schedule Assignments</button> </div>
+    </div>
+
+    <div id="fsbhoa-schedules-app" class="section-divider">
+        <h1>Lighting Schedule Management</h1>
+        <a href="#" id="add-new-schedule-btn" class="page-title-action">Add New Schedule</a>
+        <div id="schedules-list-container"></div>
+        <div id="schedule-form-container" style="display: none;"></div>
     </div>
 
     <div id="fsbhoa-mapping-manager-app" class="section-divider">

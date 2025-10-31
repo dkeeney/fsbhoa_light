@@ -27,7 +27,11 @@ add_action( 'rest_api_init', 'fsbhoa_monitor_register_rest_routes' );
  * Acts as a secure proxy between the browser and the Go backend.
  */
 function fsbhoa_lighting_get_status_from_service() {
-    $service_url = 'http://localhost:8085/status'; // Port defined in Go service
+    // Get the saved settings from the database
+    $options = get_option('fsbhoa_lighting_settings');
+    // Get the port, or use 8085 as a default if not set
+    $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
+    $service_url = sprintf('http://localhost:%d/status', $port);
     $response = wp_remote_get( $service_url, array('timeout' => 10) );
 
     if ( is_wp_error( $response ) ) {
@@ -71,7 +75,11 @@ function fsbhoa_lighting_send_override_command( WP_REST_Request $request ) {
     }
 
     // Construct the URL for the Go service endpoint
-    $service_url = sprintf('http://localhost:8085/override/zone/%d/%s', $zone_id, $state);
+    // Get the saved settings from the database
+    $options = get_option('fsbhoa_lighting_settings');
+    // Get the port, or use 8085 as a default if not set
+    $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
+    $service_url = sprintf('http://localhost:%d/override/zone/%d/%s', $port, $zone_id, $state);
 
     $response = wp_remote_post( $service_url, array('timeout' => 10) );
 

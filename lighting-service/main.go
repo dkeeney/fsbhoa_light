@@ -1,41 +1,43 @@
 package main
 
 import (
+	"encoding/json"
+        "io/ioutil" // Use ioutil for simple file reading
 	"log"
 )
 
 // Config struct holds all our settings.
 type Config struct {
-	DBUser     string
-	DBPassword string
-	DBName     string
-	DBHost     string
-	PLCs       map[int]string // Maps PLC ID to its IP address and port
+	ListenPort string         `json:"ListenPort"`
+	PLCs       map[int]string `json:"PLCs"`
+        WordPressAPIKey     string         `json:"WordPressAPIKey"`
+	WordPressAPIBaseURL string         `json:"WordPressAPIBaseURL"`
 }
+
+const configFilePath = "/var/lib/fsbhoa/lighting_service.json"
 
 func main() {
 	log.Println("Starting FSBHOA Lighting Service...")
 
-	// In a real app, you'd load this from a config file (e.g., config.json).
-	cfg := Config{
-		DBUser:     "wp_user",
-		DBPassword: "bakersfield123",
-		DBName:     "fsbhoa_db",
-		DBHost:     "127.0.0.1:3306",
-		PLCs: map[int]string{
-			1: "127.0.0.1:502", // Lodge PLC
-			2: "127.0.0.1:502", // Pool House PLC
-		},
+	// --- Load Configuration from JSON file ---
+        cfg := Config{ ListenPort: ":8085", PLCs: make(map[int]string) } // Defaults
+        configData, err := ioutil.ReadFile(configFilePath)
+	if err != nil {
+		log.Printf("WARNING: Could not read config file '%s': %v. Using defaults.", configFilePath, err)
+	} else {
+		err = json.Unmarshal(configData, &cfg)
+		if err != nil {
+	             log.Printf("WARNING: Could not parse config file '%s': %v. Using defaults.", configFilePath, err)
+		     // Reset cfg to defaults if JSON parsing fails to avoid partial config
+                     cfg = Config{ListenPort: ":8085", PLCs: make(map[int]string)}
+		}
 	}
+	log.Printf("Loaded configuration: %+v", cfg) // Log the loaded config
 
-	// Create a new App instance, which holds our state.
-	app := &App{
-		Config: cfg,
-	}
-
-	// Start the HTTP server. This will block and run forever.
-	log.Println("Starting HTTP server on port 8085...")
-	if err := app.RunServer(); err != nil {
+	// --- Start the HTTP Server ---
+	app := &App{ Config: cfg }
+	log.Printf("Starting HTTP server on %s...", cfg.ListenPort)
+	if err := app.RunServer(); err != nil { // Use ListenPort from config
 		log.Fatalf("Could not start server: %v", err)
 	}
 }

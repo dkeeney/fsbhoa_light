@@ -24,11 +24,12 @@ function fsbhoa_config_register_rest_routes() {
         ['methods' => 'DELETE', 'callback' => 'fsbhoa_lighting_delete_mapping', 'permission_callback' => function () { return current_user_can( 'manage_options' ); }],
     ] );
 
-    // Endpoint for saving assignments from the zone list
-    register_rest_route( 'fsbhoa-lighting/v1', '/zone-assignments', [
-        'methods' => 'POST',
-        'callback' => 'fsbhoa_lighting_save_zone_assignments',
-        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+
+    // Endpoint for full config
+    register_rest_route( 'fsbhoa-lighting/v1', '/full-config', [
+        'methods' => 'GET',
+        'callback' => 'fsbhoa_lighting_get_full_config',
+        'permission_callback' => 'fsbhoa_lighting_api_key_permission_check' // Use API key auth
     ] );
 }
 add_action( 'rest_api_init', 'fsbhoa_config_register_rest_routes' );
@@ -127,41 +128,52 @@ function fsbhoa_lighting_delete_zone( WP_REST_Request $request ) {
 }
 
 /**
- * Saves all zone-to-schedule assignments sent from the zone list.
+ * NEW: Register REST API endpoint for saving a single assignment.
  */
-function fsbhoa_lighting_save_zone_assignments( WP_REST_Request $request ) {
+function fsbhoa_config_register_single_assignment_route() {
+    register_rest_route( 'fsbhoa-lighting/v1', '/zone-assignment', [ // Note: 'zone-assignment' (singular)
+        'methods' => 'POST',
+        'callback' => 'fsbhoa_lighting_save_single_assignment',
+        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+    ] );
+}
+// We hook this with a different priority to ensure it's added correctly.
+add_action( 'rest_api_init', 'fsbhoa_config_register_single_assignment_route', 11 );
+
+/**
+ * Saves a single zone-to-schedule assignment.
+ * This is an "upsert": it deletes any old entry and inserts the new one.
+ */
+function fsbhoa_lighting_save_single_assignment( WP_REST_Request $request ) {
     global $wpdb;
     $map_table = $wpdb->prefix . 'fsbhoa_lighting_zone_schedule_map';
-    $assignments = $request->get_json_params(); // Expects an object like { "zoneId1": "scheduleId1", ... }
+    $params = $request->get_json_params();
 
-    if ( ! is_array( $assignments ) && !is_object( $assignments ) ) { // Check if it's an array or object
-        return new WP_REST_Response( ['message' => 'Invalid data format.'], 400 );
+    $zone_id = isset($params['zone_id']) ? intval($params['zone_id']) : 0;
+    $schedule_id = isset($params['schedule_id']) ? intval($params['schedule_id']) : 0;
+
+    if ( $zone_id <= 0 ) {
+        return new WP_REST_Response( ['message' => 'Invalid Zone ID.'], 400 );
     }
 
     $wpdb->query('START TRANSACTION');
     try {
-        // Clear all existing assignments (simpler than updating one by one)
-        $wpdb->query("TRUNCATE TABLE $map_table");
-        if($wpdb->last_error) throw new Exception('Failed to clear assignments table: ' . $wpdb->last_error);
+        // Delete any existing assignment for this zone
+        if(false === $wpdb->delete( $map_table, ['zone_id' => $zone_id] )) throw new Exception($wpdb->last_error);
 
-        foreach ( $assignments as $zone_id_str => $schedule_id_str ) {
-            $zone_id = intval($zone_id_str);
-            $schedule_id = intval($schedule_id_str);
-
-            if ($zone_id > 0 && $schedule_id > 0) { // Only insert if a valid schedule is selected
-                 if(false === $wpdb->insert( $map_table, ['zone_id' => $zone_id, 'schedule_id' => $schedule_id] )) {
-                     throw new Exception('Failed to insert assignment: ' . $wpdb->last_error);
-                 }
-            }
+        // If a valid schedule (not "-- None --") was chosen, insert the new assignment
+        if ( $schedule_id > 0 ) {
+             if(false === $wpdb->insert( $map_table, ['zone_id' => $zone_id, 'schedule_id' => $schedule_id] )) {
+                 throw new Exception('Failed to insert new assignment: ' . $wpdb->last_error);
+             }
         }
         $wpdb->query('COMMIT');
-        return new WP_REST_Response( ['message' => 'Assignments saved successfully.'], 200 );
+        return new WP_REST_Response( ['message' => 'Assignment saved successfully.'], 200 );
     } catch ( Exception $e ) {
         $wpdb->query('ROLLBACK');
-        return new WP_REST_Response(['message' => 'Database error saving assignments: ' . $e->getMessage()], 500);
+        return new WP_REST_Response(['message' => 'Database error saving assignment: ' . $e->getMessage()], 500);
     }
 }
-
 
 /**
  * Fetches all PLC output mappings.
@@ -223,4 +235,119 @@ function fsbhoa_lighting_delete_mapping( WP_REST_Request $request ) {
     } catch(Exception $e) {
         return new WP_REST_Response( [ 'message' => 'Database error: ' . $e->getMessage() ], 500 );
     }
+}
+
+
+/**
+ * Permission check using API Key in header.
+ */
+function fsbhoa_lighting_api_key_permission_check( WP_REST_Request $request ) {
+    $provided_key = $request->get_header('X-API-KEY');
+    if (empty($provided_key)) {
+        return new WP_Error('rest_forbidden', 'API Key is missing.', ['status' => 401]);
+    }
+
+    $options = get_option('fsbhoa_lighting_settings');
+    $stored_key = isset($options['go_service_api_key']) ? $options['go_service_api_key'] : '';
+
+    if (empty($stored_key) || !hash_equals($stored_key, $provided_key)) {
+        return new WP_Error('rest_forbidden', 'Invalid API Key.', ['status' => 403]);
+    }
+    return true;
+}
+
+/**
+ * Fetches the entire lighting configuration for the Go service.
+ * Correctly casts numeric types for the Go service.
+ */
+function fsbhoa_lighting_get_full_config() {
+    global $wpdb;
+    $config_data = [
+        'zones' => [],
+        'mappings' => [],
+        'schedules' => [],
+    ];
+    $error = null;
+
+    // --- 1. Fetch Zones ---
+    $zones_table = $wpdb->prefix . 'fsbhoa_lighting_zones';
+    $schedule_map_table = $wpdb->prefix . 'fsbhoa_lighting_zone_schedule_map';
+    $zones_raw = $wpdb->get_results( "
+        SELECT z.id, z.zone_name, COALESCE(sm.schedule_id, 0) as schedule_id
+        FROM $zones_table z
+        LEFT JOIN $schedule_map_table sm ON z.id = sm.zone_id
+        ORDER BY z.zone_name ASC
+    ", ARRAY_A );
+    if ($wpdb->last_error) $error = $wpdb->last_error;
+
+    if (is_array($zones_raw)) {
+        foreach ($zones_raw as $row) {
+            $config_data['zones'][] = [
+                'id' => (int)$row['id'], // <-- FIX: Cast to int
+                'zone_name' => $row['zone_name'],
+                'schedule_id' => (int)$row['schedule_id'] // <-- FIX: Cast to int
+            ];
+        }
+    }
+
+    // --- 2. Fetch Mappings ---
+    $mappings_table = $wpdb->prefix . 'fsbhoa_lighting_plc_outputs';
+    $output_map_table = $wpdb->prefix . 'fsbhoa_lighting_zone_output_map';
+    $mappings_raw = $wpdb->get_results( "SELECT * FROM $mappings_table ORDER BY plc_id, id ASC", ARRAY_A );
+    if ($wpdb->last_error) $error = $wpdb->last_error;
+    
+    $zone_links = $wpdb->get_results("SELECT zone_id, output_id FROM $output_map_table", ARRAY_A);
+    $links_by_output = [];
+    foreach($zone_links as $link){ 
+        $links_by_output[(int)$link['output_id']][] = (int)$link['zone_id']; // <-- FIX: Cast to int
+    }
+
+    if(is_array($mappings_raw)){
+        foreach($mappings_raw as $map){
+            $config_data['mappings'][] = [
+                'id' => (int)$map['id'], // <-- FIX: Cast to int
+                'plc_id' => (int)$map['plc_id'], // <-- FIX: Cast to int
+                'plc_outputs' => json_decode($map['plc_outputs']),
+                'relays' => json_decode($map['relays']),
+                'linked_zone_ids' => $links_by_output[(int)$map['id']] ?? []
+            ];
+        }
+    }
+
+    // --- 3. Fetch Schedules ---
+    $schedules_table = $wpdb->prefix . 'fsbhoa_lighting_schedules';
+    $spans_table = $wpdb->prefix . 'fsbhoa_lighting_schedule_spans';
+    $schedules_raw = $wpdb->get_results( "SELECT * FROM $schedules_table ORDER BY schedule_name ASC", ARRAY_A );
+    if ($wpdb->last_error) $error = $wpdb->last_error;
+    $spans_raw = $wpdb->get_results( "SELECT * FROM $spans_table ORDER BY schedule_id ASC, id ASC", ARRAY_A );
+    if ($wpdb->last_error) $error = $wpdb->last_error;
+
+    $spans_by_schedule = [];
+    foreach($spans_raw as $span){
+        $spans_by_schedule[(int)$span['schedule_id']][] = [ // <-- FIX: Cast to int
+            'id' => (int)$span['id'], // <-- FIX: Cast to int
+            'schedule_id' => (int)$span['schedule_id'], // <-- FIX: Cast to int
+            'days_of_week' => json_decode($span['days_of_week']),
+            'on_trigger' => $span['on_trigger'],
+            'on_time' => $span['on_time'], // Keep as string/null
+            'off_trigger' => $span['off_trigger'],
+            'off_time' => $span['off_time'] // Keep as string/null
+        ];
+    }
+    
+    if(is_array($schedules_raw)){
+         foreach($schedules_raw as $sched){
+            $config_data['schedules'][] = [
+                'id' => (int)$sched['id'], // <-- FIX: Cast to int
+                'schedule_name' => $sched['schedule_name'],
+                'spans' => $spans_by_schedule[(int)$sched['id']] ?? []
+            ];
+        }
+    }
+
+    if ($error) {
+        return new WP_REST_Response(['message' => 'Database error fetching config: ' . $error], 500);
+    }
+    
+    return new WP_REST_Response($config_data, 200);
 }

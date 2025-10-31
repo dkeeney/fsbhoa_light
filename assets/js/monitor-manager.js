@@ -142,6 +142,45 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
+    // ---  Event listener for override buttons ---
+    app.addEventListener('click', async (e) => {
+        if (e.target.matches('a.override-link')) {
+            e.preventDefault();
+            const link = e.target;
+            
+            // Check if the link is disabled
+            if (link.classList.contains('is-disabled')) {
+                return; // Do nothing if the light is already in this state
+            }
+
+            const zoneId = link.dataset.zoneId;
+            const state = link.dataset.state;
+            const statusDiv = document.getElementById('override-status');
+
+            // Disable all buttons for this zone
+            app.querySelectorAll(`.override-link[data-zone-id="${zoneId}"]`).forEach(btn => btn.style.opacity = '0.5');
+            statusDiv.textContent = `Sending ${state.toUpperCase()} command for Zone ${zoneId}...`;
+
+            try {
+                const response = await api.sendOverride(zoneId, state);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.message || `Failed to send override (HTTP ${response.status})`);
+                }
+                statusDiv.textContent = `Override command sent. Waiting for next status update...`;
+                
+                // Trigger an immediate status update after a short delay
+                setTimeout(() => updateStatus(), 1000); // Wait 1 sec for PLC to react
+
+            } catch (error) {
+                console.error('Override failed:', error);
+                statusDiv.textContent = `Error: ${error.message}`;
+                // Re-enable buttons on failure
+                app.querySelectorAll(`.override-link[data-zone-id="${zoneId}"]`).forEach(btn => btn.style.opacity = '1');
+            }
+        }
+    });
+
     // Initial load and then update every 5 seconds
     updateStatus(true); // Force config load on first run
     setInterval(updateStatus, 5000); // 5 seconds
