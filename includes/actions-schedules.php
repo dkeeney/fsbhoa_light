@@ -82,6 +82,7 @@ function fsbhoa_lighting_create_or_update_schedule(WP_REST_Request $request) {
             }
         }
         $wpdb->query('COMMIT');
+        fsbhoa_lighting_trigger_go_service_sync();
         return new WP_REST_Response(['message' => 'Schedule saved successfully.'], 200);
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
@@ -105,6 +106,7 @@ function fsbhoa_lighting_delete_schedule(WP_REST_Request $request) {
         if(false === $wpdb->delete($spans_table, ['schedule_id' => $schedule_id])) throw new Exception($wpdb->last_error);
         if(false === $wpdb->delete( $schedules_table, [ 'id' => $schedule_id ] )) throw new Exception($wpdb->last_error);
         $wpdb->query('COMMIT');
+        fsbhoa_lighting_trigger_go_service_sync();
         return new WP_REST_Response( [ 'message' => 'Schedule deleted successfully.' ], 200 );
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');

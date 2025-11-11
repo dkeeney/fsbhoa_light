@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const rows = zoneData.map(zone => {
             let isZoneOn = false;
             let firstOnOutput = null;
+            let plcID = 0;
 
             // Determine zone state (existing logic)
             if (zone.mapping_ids && zone.mapping_ids.length > 0) {
@@ -38,27 +39,40 @@ document.addEventListener('DOMContentLoaded', function () {
                 const mapping = mappingData.find(m => m.id == firstMappingId);
                 if (mapping && mapping.plc_outputs) {
                     try {
-                        const outputs = JSON.parse(mapping.plc_outputs);
-                        if (outputs.length > 0) firstOnOutput = outputs[0];
+                        // FIX: plc_outputs is now an array
+                        const outputs = mapping.plc_outputs;
+                        if (outputs.length > 0) {
+                            firstOnOutput = outputs[0];
+                            plcID = mapping.plc_id;
+                        }
                     } catch (e) { console.error("Error parsing mapping outputs:", mapping.plc_outputs); }
                 }
             }
-            if (firstOnOutput && status[firstOnOutput] === true) isZoneOn = true;
 
-            const statusText = isZoneOn ? '<span style="color: green; font-weight: bold;">ON</span>' : '<span style="color: #666;">OFF</span>';
-    
-            // --- Apply CSS classes for icon state and disabled status ---
-            const onLinkClasses = `override-link dashicons dashicons-lightbulb ${isZoneOn ? 'is-disabled' : ''}`;
-            const offLinkClasses = `override-link dashicons dashicons-lightbulb is-off ${!isZoneOn ? 'is-disabled' : ''}`; // Add 'is-off' class
-    
+            // Construct the unique key to match the Go service
+            const uniqueKey = `PLC${plcID}-${firstOnOutput}`; // e.g., "PLC1-Y101"
+            if (firstOnOutput && status[uniqueKey] === true) {
+                isZoneOn = true;
+            }
+
+            // ---Lightbulb for Status ---
+            const bulbClasses = `dashicons dashicons-lightbulb monitor-bulb ${isZoneOn ? 'is-on' : 'is-off'}`;
+            const statusText = `<span class="${bulbClasses}" title="${isZoneOn ? 'ON' : 'OFF'}"></span>`;
+
+            // ---  Text Links for Override ---
+            const onLinkClasses = `override-link ${isZoneOn ? 'is-disabled' : ''}`;
+            const offLinkClasses = `override-link ${!isZoneOn ? 'is-disabled' : ''}`;
+            const overrideLinks = `
+                <a href="#" class="${onLinkClasses}" data-zone-id="${zone.id}" data-state="on" title="Turn ON">ON</a>
+                <span style="margin: 0 5px; color: #ccc;">|</span>
+                <a href="#" class="${offLinkClasses}" data-zone-id="${zone.id}" data-state="off" title="Turn OFF">OFF</a>
+            `;
+            
             return `
                 <tr>
                     <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
                     <td>${statusText}</td>
-                    <td>
-                        <a href="#" class="${onLinkClasses}" data-zone-id="${zone.id}" data-state="on" title="Turn ON"></a>
-                        <a href="#" class="${offLinkClasses}" data-zone-id="${zone.id}" data-state="off" title="Turn OFF"></a>
-                    </td>
+                    <td>${overrideLinks}</td>
                 </tr>
             `;
         }).join('');

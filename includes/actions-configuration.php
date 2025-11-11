@@ -69,6 +69,7 @@ function fsbhoa_lighting_create_or_update_zone( WP_REST_Request $request ) {
             }
         }
         $wpdb->query('COMMIT');
+        fsbhoa_lighting_trigger_go_service_sync();
         return new WP_REST_Response( [ 'message' => 'Zone saved successfully.', 'id' => $zone_id ], 200 );
     } catch ( Exception $e ) {
         $wpdb->query('ROLLBACK');
@@ -120,6 +121,7 @@ function fsbhoa_lighting_delete_zone( WP_REST_Request $request ) {
         if(false === $wpdb->delete( $schedule_map_table, [ 'zone_id' => $zone_id ] )) throw new Exception($wpdb->last_error); // Delete schedule map entries
         if(false === $wpdb->delete( $zones_table, [ 'id' => $zone_id ] )) throw new Exception($wpdb->last_error); // Delete the zone itself
         $wpdb->query('COMMIT');
+        fsbhoa_lighting_trigger_go_service_sync();
         return new WP_REST_Response( [ 'message' => 'Zone deleted successfully.' ], 200 );
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
@@ -168,6 +170,7 @@ function fsbhoa_lighting_save_single_assignment( WP_REST_Request $request ) {
              }
         }
         $wpdb->query('COMMIT');
+        fsbhoa_lighting_trigger_go_service_sync();
         return new WP_REST_Response( ['message' => 'Assignment saved successfully.'], 200 );
     } catch ( Exception $e ) {
         $wpdb->query('ROLLBACK');
@@ -181,8 +184,27 @@ function fsbhoa_lighting_save_single_assignment( WP_REST_Request $request ) {
 function fsbhoa_lighting_get_mappings() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'fsbhoa_lighting_plc_outputs';
-    $mappings = $wpdb->get_results( "SELECT * FROM $table_name ORDER BY plc_id, id ASC" );
-    if ($wpdb->last_error) return new WP_REST_Response(['message' => 'DB error: ' . $wpdb->last_error], 500);
+    
+    // Get the raw results from the database
+    $mappings_raw = $wpdb->get_results( "SELECT id, plc_id, description, plc_outputs, relays, map_coordinates FROM $table_name ORDER BY plc_id, id ASC" );
+    
+    if ($wpdb->last_error) {
+        return new WP_REST_Response(['message' => 'DB error: ' . $wpdb->last_error], 500);
+    }
+
+    // Loop through and decode the JSON fields so they are sent as proper arrays
+    $mappings = []; // Create a new, empty array for the processed results
+    
+    // We must check and loop over $mappings_raw (the variable we just fetched)
+    if (is_array($mappings_raw)) { 
+        foreach ($mappings_raw as $map) {
+            $map->plc_outputs     = json_decode($map->plc_outputs ?? '[]');
+            $map->relays          = json_decode($map->relays ?? '[]');
+            $map->map_coordinates = json_decode($map->map_coordinates ?? '[]');
+            $mappings[] = $map; // Add the processed map to the new array
+        }
+    }
+
     return new WP_REST_Response( $mappings, 200 );
 }
 
@@ -205,7 +227,16 @@ function fsbhoa_lighting_create_or_update_mapping( WP_REST_Request $request ) {
         'description' => sanitize_text_field( $params['description'] ),
         'plc_outputs' => wp_json_encode( $plc_outputs_sanitized ),
         'relays'      => wp_json_encode( $relays_sanitized ),
+        'map_coordinates' => isset($params['map_coordinates']) ? $params['map_coordinates'] : null
     ];
+
+    // Ensure the data is valid JSON or null
+    if (isset($data['map_coordinates'])) {
+        if (json_decode($data['map_coordinates']) === null && $data['map_coordinates'] !== '[]') {
+            // It's invalid JSON and not an empty array string, set to null
+            $data['map_coordinates'] = null;
+        }
+    }
 
     try {
         if ( $mapping_id > 0 ) {
@@ -214,6 +245,7 @@ function fsbhoa_lighting_create_or_update_mapping( WP_REST_Request $request ) {
             $result = $wpdb->insert( $table_name, $data );
         }
         if ( $result === false ) throw new Exception($wpdb->last_error);
+        fsbhoa_lighting_trigger_go_service_sync();
     } catch ( Exception $e ) {
         return new WP_REST_Response( [ 'message' => 'Database error: ' . $e->getMessage() ], 500 );
     }
@@ -231,6 +263,7 @@ function fsbhoa_lighting_delete_mapping( WP_REST_Request $request ) {
     
     try {
         if(false === $wpdb->delete( $table_name, [ 'id' => $mapping_id ] )) throw new Exception($wpdb->last_error);
+        fsbhoa_lighting_trigger_go_service_sync();
         return new WP_REST_Response( [ 'message' => 'Mapping deleted successfully.' ], 200 );
     } catch(Exception $e) {
         return new WP_REST_Response( [ 'message' => 'Database error: ' . $e->getMessage() ], 500 );

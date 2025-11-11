@@ -11,6 +11,7 @@ class Fsbhoa_Lighting_Admin_Settings {
     private $option_name = 'fsbhoa_lighting_settings';
     private $page_slug = 'fsbhoa-lighting-settings';
     private $config_file_path = '/var/lib/fsbhoa/lighting_service.json';
+    private $default_log_path = '/home/fsbhoa/fsbhoa_light/lighting-service/lighting-service.log';
 
     public function __construct() {
         add_action( 'admin_menu', array( $this, 'add_settings_page' ) );
@@ -22,6 +23,9 @@ class Fsbhoa_Lighting_Admin_Settings {
         add_action( 'wp_ajax_fsbhoa_save_lighting_settings', array( $this, 'ajax_save_settings' ) );
         // AJAX handler for restarting the service
         add_action( 'wp_ajax_fsbhoa_restart_lighting_service', array( $this, 'ajax_restart_service' ) );
+        // AJAX handler for generating API key
+        add_action( 'wp_ajax_fsbhoa_generate_lighting_api_key', array( $this, 'ajax_generate_api_key' ) );
+
     }
 
     /**
@@ -30,12 +34,12 @@ class Fsbhoa_Lighting_Admin_Settings {
     public function add_settings_page() {
         add_menu_page(
             'FSBHOA Lighting Settings',  // Page Title (appears in browser tab)
-            'FSBHOA Lighting',           // Menu Title (appears in the sidebar)
-            'manage_options',            // Capability required
-            $this->page_slug,            // Menu Slug (unique ID, e.g., 'fsbhoa-lighting-settings')
+            'FSBHOA Lighting',          // Menu Title (appears in the sidebar)
+            'manage_options',           // Capability required
+            $this->page_slug,           // Menu Slug (unique ID, e.g., 'fsbhoa-lighting-settings')
             array( $this, 'render_settings_page' ), // Function to render the page
-            'dashicons-lightbulb',       // Icon (can choose from Dashicons list)
-            26                           // Position (adjusts placement in the menu, lower numbers are higher up)
+            'dashicons-lightbulb',      // Icon (can choose from Dashicons list)
+            26                          // Position
         );
     }
 
@@ -53,18 +57,43 @@ class Fsbhoa_Lighting_Admin_Settings {
         add_settings_section('fsbhoa_lighting_section_service', 'Go Service Configuration', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_plcs', 'PLC Network Addresses', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_api', 'API Key for Go Service', null, $this->page_slug);
+        add_settings_section('fsbhoa_lighting_section_map', 'Monitor Map Configuration', null, $this->page_slug);
+
 
         // --- Fields ---
         add_settings_field('go_service_port', 'Go Service Listen Port', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_service', ['id' => 'go_service_port', 'type' => 'number', 'default' => 8085, 'desc' => 'Port for the Go service HTTP server.']);
+        add_settings_field(
+		'log_file_path', 
+		'Go Service Log File Path', 
+		array($this, 'render_field'), 
+		$this->page_slug, 
+		'fsbhoa_lighting_section_service', 
+		[
+			'id' => 'log_file_path', 
+			'type' => 'text', 
+			'default' => $this->default_log_path, 
+			'desc' => 'Full path to the log file. Use "stdout" to log to console.',
+			'placeholder' => $this->default_log_path
+		]
+	);
         add_settings_field('plc1_address', 'PLC #1 Address (Lodge)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc1_address', 'placeholder' => 'e.g., 192.168.1.201:502']);
         add_settings_field('plc2_address', 'PLC #2 Address (Pool)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc2_address', 'placeholder' => 'e.g., 192.168.1.202:502']);
         add_settings_field(
             'go_service_api_key',
             'Go Service API Key',
-            array($this, 'render_api_key_field'), // Reuse the function from your access system
+            array($this, 'render_api_key_field'),
             $this->page_slug,
             'fsbhoa_lighting_section_api',
-            ['id' => 'go_service_api_key', 'desc' => 'Secret key used by the Go service to fetch configuration. Generate a new key if needed.']
+            ['id' => 'go_service_api_key', 'desc' => 'Secret key used by the Go service to fetch configuration.']
+        );
+
+        add_settings_field(
+            'map_image_url',
+            'Map Background Image',
+            array($this, 'render_media_uploader_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_map',
+            ['id' => 'map_image_url', 'desc' => 'Upload or select the map image from the Media Library.']
         );
     }
 
@@ -94,6 +123,35 @@ class Fsbhoa_Lighting_Admin_Settings {
             echo '<p class="description">' . esc_html($desc) . '</p>';
         }
     }
+    
+    /**
+     * --- Renders the media uploader button and preview ---
+     */
+    public function render_media_uploader_field($args) {
+        $options = get_option($this->option_name, []);
+        $id      = $args['id'];
+        $desc    = $args['desc'] ?? '';
+        $value   = isset($options[$id]) ? $options[$id] : '';
+        ?>
+        <div class="fsbhoa-media-uploader-wrapper">
+            <input type="text" 
+                   name="<?php echo esc_attr($this->option_name); ?>[<?php echo esc_attr($id); ?>]" 
+                   id="<?php echo esc_attr($id); ?>" 
+                   value="<?php echo esc_attr($value); ?>" 
+                   class="regular-text"
+                   placeholder="Click Upload to select an image"
+                   />
+            <button type="button" class="button" id="fsbhoa-upload-<?php echo esc_attr($id); ?>-button">Upload/Select Image</button>
+            <p class="description"><?php echo esc_html($desc); ?></p>
+            
+            <div id="<?php echo esc_attr($id); ?>-preview-wrapper" style="margin-top: 10px;">
+                <?php if ($value): ?>
+                    <img src="<?php echo esc_url($value); ?>" style="max-width: 400px; height: auto; border: 1px solid #ddd;">
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
 
     /**
      * Sanitize settings before saving.
@@ -102,12 +160,15 @@ class Fsbhoa_Lighting_Admin_Settings {
         $output = get_option($this->option_name, []);
         // Sanitize each field appropriately
         $output['go_service_port'] = isset( $input['go_service_port'] ) ? absint( $input['go_service_port'] ) : 8085;
+        $output['log_file_path'] = isset( $input['log_file_path'] ) ? sanitize_text_field( $input['log_file_path'] ) : $this->default_log_path;
         $output['plc1_address'] = isset( $input['plc1_address'] ) ? sanitize_text_field( $input['plc1_address'] ) : '';
         $output['plc2_address'] = isset( $input['plc2_address'] ) ? sanitize_text_field( $input['plc2_address'] ) : '';
         $output['go_service_api_key'] = isset( $input['go_service_api_key'] ) ? sanitize_text_field( $input['go_service_api_key'] ) : ($output['go_service_api_key'] ?? '');
+        $output['map_image_url'] = isset( $input['map_image_url'] ) ? esc_url_raw( $input['map_image_url'] ) : '';
+
         return $output;
     }
-    
+
     /**
      * Writes the Go service config file.
      */
@@ -115,6 +176,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         $options = get_option($this->option_name, []);
         $config = [
             'ListenPort' => ':' . ($options['go_service_port'] ?? 8085), // Go expects ":port" format
+            'LogFilePath' => $options['log_file_path'] ?? $this->default_log_path,
             'PLCs'       => [
                 // Store PLC addresses directly in the format Go expects (map[int]string)
                 1 => $options['plc1_address'] ?? '',
@@ -130,12 +192,12 @@ class Fsbhoa_Lighting_Admin_Settings {
             mkdir($config_dir, 0755, true); // Create /var/lib/fsbhoa if needed
         }
         // Ensure the directory is writable by the web server
-        chown($config_dir, 'www-data'); 
+        chown($config_dir, 'www-data');
         chgrp($config_dir, 'www-data');
 
         file_put_contents($this->config_file_path, $json_data);
          // Set file permissions so Go service (running as 'pi') can read it
-        chmod($this->config_file_path, 0644); 
+        chmod($this->config_file_path, 0644);
     }
 
     /**
@@ -151,11 +213,12 @@ class Fsbhoa_Lighting_Admin_Settings {
         foreach($options_input as $opt) {
             $sanitized_options[$opt['name']] = $opt['value'];
         }
-        
+
         $updated_options = $this->sanitize_settings($sanitized_options);
         update_option($this->option_name, $updated_options);
 
         $this->write_go_service_config(); // Write the JSON file after saving options
+        // We do NOT trigger a sync here, as this requires a service restart.
 
         wp_send_json_success('Settings saved. Config file updated.');
     }
@@ -172,7 +235,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         $desc    = $args['desc'] ?? '';
         ?>
         <input type="text" name="<?php echo esc_attr($this->option_name); ?>[<?php echo esc_attr($id); ?>]" id="<?php echo esc_attr($id); ?>" value="<?php echo esc_attr($value); ?>" class="regular-text" readonly="readonly" placeholder="Click generate to create a new key" />
-        <button type="button" class="button" id="fsbhoa-generate-<?php echo esc_attr( str_replace('fsbhoa_lighting_settings[', '', $id) ); ?>-button">Generate New Key</button>
+        <button type="button" class="button" id="fsbhoa-generate-<?php echo esc_attr( $id ); ?>-button">Generate New Key</button>
         <p class="description"><?php echo esc_html($desc); ?></p>
         <?php
     }
@@ -279,8 +342,10 @@ class Fsbhoa_Lighting_Admin_Settings {
     public function enqueue_admin_scripts($hook) {
         if ($hook !== 'toplevel_page_' . $this->page_slug) { return; } // Correct hook for top-level
 
+        wp_enqueue_media();
+
         $script_handle = 'fsbhoa-lighting-settings-script';
-        wp_enqueue_script($script_handle, plugin_dir_url(__FILE__) . '../assets/js/admin-settings.js', ['jquery'], '1.0.0', true);
+        wp_enqueue_script($script_handle, plugin_dir_url(__FILE__) . '../assets/js/admin-settings.js', ['jquery', 'media-upload'], '1.1.0', true); // Added media-upload
         wp_localize_script($script_handle, 'fsbhoa_lighting_admin_vars', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'save_nonce' => wp_create_nonce('fsbhoa_lighting_settings_nonce'),
@@ -288,14 +353,6 @@ class Fsbhoa_Lighting_Admin_Settings {
         ]);
     }
 } // End of class Fsbhoa_Lighting_Admin_Settings
-
-// --- Keep the sudoers check functions outside the class ---
-// function fsbhoa_lighting_check_sudoers() { ... }
-// function fsbhoa_lighting_sudoers_notice() { ... }
-// add_action( 'admin_notices', 'fsbhoa_lighting_sudoers_notice' );
-
-// Instantiate the class (should already be there)
-// new Fsbhoa_Lighting_Admin_Settings();
 
 
 // Instantiate the class
@@ -322,3 +379,4 @@ function fsbhoa_lighting_sudoers_notice() {
     }
 }
 add_action( 'admin_notices', 'fsbhoa_lighting_sudoers_notice' );
+

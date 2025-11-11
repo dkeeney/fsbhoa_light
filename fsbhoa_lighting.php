@@ -1,11 +1,11 @@
 <?php
 /**
- * Plugin Name:       FSBHOA Lighting Control
- * Description:       A custom plugin to manage and schedule PLC-based lighting control panels.
- * Version:           1.0.0
- * Author:            Your Name
- * License:           GPL-2.0-or-later
- * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Plugin Name:        FSBHOA Lighting Control
+ * Description:        A custom plugin to manage and schedule PLC-based lighting control panels.
+ * Version:            1.2.1
+ * Author:             Your Name
+ * License:            GPL-2.0-or-later
+ * License URI:        https://www.gnu.org/licenses/gpl-2.0.html
  */
 
 // If this file is called directly, abort.
@@ -57,7 +57,15 @@ function fsbhoa_lighting_activate() {
 
     // 2. PLC Outputs Table (Hardware Map)
     $table_name_outputs = $wpdb->prefix . 'fsbhoa_lighting_plc_outputs';
-    $sql_outputs = "CREATE TABLE $table_name_outputs ( id mediumint(9) NOT NULL AUTO_INCREMENT, plc_id tinyint(4) NOT NULL, description varchar(255), plc_outputs json NOT NULL, relays json NOT NULL, PRIMARY KEY  (id) ) $charset_collate;";
+    $sql_outputs = "CREATE TABLE $table_name_outputs (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        plc_id tinyint(4) NOT NULL,
+        description varchar(255),
+        plc_outputs json NOT NULL,
+        relays json NOT NULL,
+        map_coordinates json DEFAULT NULL,
+        PRIMARY KEY  (id)
+    ) $charset_collate;";
     dbDelta( $sql_outputs );
 
     // 3. Zone to Output Mapping Table
@@ -74,7 +82,7 @@ function fsbhoa_lighting_activate() {
     $table_name_spans = $wpdb->prefix . 'fsbhoa_lighting_schedule_spans';
     $sql_spans = "CREATE TABLE $table_name_spans ( id mediumint(9) NOT NULL AUTO_INCREMENT, schedule_id mediumint(9) NOT NULL, days_of_week JSON NOT NULL, on_trigger varchar(20) NOT NULL, on_time time, off_trigger varchar(20) NOT NULL, off_time time, PRIMARY KEY  (id), KEY schedule_id (schedule_id) ) $charset_collate;";
     dbDelta( $sql_spans );
-    
+
     // 5. Zone to Schedule Mapping Table
     $table_name_schedule_map = $wpdb->prefix . 'fsbhoa_lighting_zone_schedule_map';
     $sql_schedule_map = "CREATE TABLE $table_name_schedule_map ( zone_id mediumint(9) NOT NULL, schedule_id mediumint(9) NOT NULL, PRIMARY KEY  (zone_id, schedule_id) ) $charset_collate;";
@@ -88,33 +96,83 @@ register_activation_hook( __FILE__, 'fsbhoa_lighting_activate' );
 function fsbhoa_lighting_enqueue_scripts() {
     // Force-load jQuery on the frontend to fix theme dependency issues.
     wp_enqueue_script('jquery');
+    
+    // --- Get settings to pass to JS ---
+    $options = get_option('fsbhoa_lighting_settings');
+    $map_url = $options['map_image_url'] ?? '';
+
+    // --- Prepare the common data ---
+    $common_data = array(
+        'rest_url' => rest_url(),
+        'nonce'    => wp_create_nonce( 'wp_rest' )
+    );
 
     // For the configuration page
     if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_configuration' ) ) {
-        wp_enqueue_script( 'fsbhoa-zone-manager', plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager.js', array(), '1.0.0', true );
-        wp_localize_script( 'fsbhoa-zone-manager', 'fsbhoa_lighting_data', array( 'rest_url' => rest_url(), 'nonce' => wp_create_nonce( 'wp_rest' ) ) );
+        
+        // 1. Register the new UI file
+        wp_enqueue_script( 
+            'fsbhoa-zone-manager-ui', 
+            plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager-ui.js', 
+            array(), '1.2.0', true 
+        );
+        
+        // 2. Register the new Map file
+        wp_enqueue_script( 
+            'fsbhoa-zone-manager-map', 
+            plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager-map.js', 
+            array(), '1.2.0', true 
+        );
+
+        // 3. Register the main file and tell it to load AFTER the other two
+        wp_enqueue_script( 
+            'fsbhoa-zone-manager', 
+            plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager.js', 
+            array('jquery', 'fsbhoa-zone-manager-ui', 'fsbhoa-zone-manager-map'), 
+            '1.2.0', true 
+        );
+        
+        // 4. Pass data to the main script
+        $config_data = $common_data;
+        $config_data['map_image_url'] = $map_url; // Add the map_url
+        wp_localize_script( 'fsbhoa-zone-manager', 'fsbhoa_lighting_data', $config_data );
     }
 
     // For the schedules page
     if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_schedules' ) ) {
-        wp_enqueue_script( 'fsbhoa-schedules-manager', plugin_dir_url( __FILE__ ) . 'assets/js/schedules-manager.js', array(), '1.0.0', true );
-        wp_localize_script( 'fsbhoa-schedules-manager', 'fsbhoa_lighting_data', array( 'rest_url' => rest_url(), 'nonce' => wp_create_nonce( 'wp_rest' ) ) );
+        // This page is now managed by the config page scripts
     }
 
-    // --- For the monitor page ---
+    // --- For the LIST monitor page ---
     if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_status_monitor' ) ) {
         wp_enqueue_script(
-            'fsbhoa-monitor-manager', // New unique handle
-            plugin_dir_url( __FILE__ ) . 'assets/js/monitor-manager.js', // Path to the new file
+            'fsbhoa-monitor-manager', 
+            plugin_dir_url( __FILE__ ) . 'assets/js/monitor-manager.js', 
             array(), '1.0.0', true
         );
+        // Only localize data for this script
         wp_localize_script(
-            'fsbhoa-monitor-manager', // Must match the handle above
+            'fsbhoa-monitor-manager', 
             'fsbhoa_lighting_data',
-            array(
-                'rest_url' => rest_url(),
-                'nonce'    => wp_create_nonce( 'wp_rest' )
-            )
+            $common_data // It doesn't need the map_url
+        );
+    }
+    
+    // --- For the MAP monitor page ---
+    if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_map_monitor' ) ) {
+        wp_enqueue_script(
+            'fsbhoa-map-monitor', // New unique handle
+            plugin_dir_url( __FILE__ ) . 'assets/js/map-monitor.js', // New file
+            array(), '1.0.0', true
+        );
+        
+        // Pass the data it needs
+        $map_data = $common_data;
+        $map_data['map_image_url'] = $map_url; // Add the map_url
+        wp_localize_script(
+            'fsbhoa-map-monitor', 
+            'fsbhoa_lighting_data',
+            $map_data // Use the separate $map_data array
         );
     }
 }
@@ -131,15 +189,4 @@ function fsbhoa_require_admin_globally() {
     }
 }
 add_action( 'template_redirect', 'fsbhoa_require_admin_globally' );
-
-/**
- * Adds a phpMyAdmin link to the WordPress Admin Bar.
- */
-// function fsbhoa_lighting_add_admin_bar_link( $wp_admin_bar ) {
-//     if ( ! current_user_can( 'manage_options' ) ) { return; }
-//     $args = array( 'id' => 'phpmyadmin-link', 'title' => 'phpMyAdmin', 'href'  => site_url( '/phpmyadmin' ), 'meta'  => array( 'target' => '_blank' ) );
-//     $wp_admin_bar->add_node( $args );
-// }
-// add_action( 'admin_bar_menu', 'fsbhoa_lighting_add_admin_bar_link', 999 );
-
 

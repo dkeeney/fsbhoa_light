@@ -102,3 +102,24 @@ function fsbhoa_lighting_send_override_command( WP_REST_Request $request ) {
 
     return new WP_REST_Response( ['message' => 'Override command sent successfully.'], 200 );
 }
+
+
+/**
+ * Triggers the Go service's /sync endpoint.
+ * This should be called after any configuration change.
+ * It uses a non-blocking request so it doesn't slow down the WP admin.
+ */
+function fsbhoa_lighting_trigger_go_service_sync() {
+    // Get the saved settings to find the port
+    $options = get_option('fsbhoa_lighting_settings');
+    $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
+    $service_url = sprintf('http://localhost:%d/sync', $port);
+
+    // Use wp_remote_post for a non-blocking (fire-and-forget) request.
+    // We set 'blocking' to false and 'timeout' to a very low value.
+    wp_remote_post( $service_url, array(
+        'method'    => 'POST',
+        'timeout'   => 1, // Don't wait more than 1 second
+        'blocking'  => false, // Return immediately, don't wait for the response
+    ) );
+}

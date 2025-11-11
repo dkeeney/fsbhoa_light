@@ -1,0 +1,297 @@
+Here is a complete, AI-readable text listing of the entire ladder logic program 
+(all rungs in all three program files) based on our final design.
+Save it for future reference when working with AI.
+
+## Main Program
+//  LODGE Lighting controller Ladder Logic
+//  David Keeney, Nov 9, 2025
+//  User Account:   admin,  bakersfield12
+//
+// Note:  This hardware has the following restrictions:
+//   No nested Loops or subroutines
+//   Rungs with Loops cannot have contacts.
+//   Dereferencing, for example, C[DS30], can only be done in the COPY instruction
+//
+//  The IPAddress for the master is hard coded as 192.168.42.60.  So during installation
+//  be sure to configure the master's IP Address as static so the slave can find it.
+//
+
+
+// ---------------------------------
+// 1. Clock Calculation
+// ---------------------------------
+Setup the Clock so the schedule run has the right time.
+Note: C1020 is just a bit that is always off used where we cannot use a constant 0.
+
+
+// ---------------------------------
+// Main loop
+// ---------------------------------
+// Rung 1: Clock Calc & Always_OFF Bit
+Rung 1: [Always ON] -> (MATH DS30 = (SD24 * 100) + SD25)
+Rung 2: [Always ON] -> (RST C1020) // Always_OFF bit
+
+ === Slave Logic (Photocell is remote) ===
+// If I am the Slave, read C154 from the Master PLC (IP 192.168.42.61)
+// Note that the RECV instruction calls this the "Server (Slave)" but it is the IP address of the side that has the photo cell which is down at the Cabana.  
+// (SC4 is a 0.2s clock, so we poll 5x per second)
+Rung 2:     [SC4] -> (RECV)  Via WLAN IP: 192.168.42.61
+                             ServerPortNo: 502, Slave ID 1
+                             Modbus Function code: 01
+                             Slave Addr: C154, 1 bit.
+                             Master:  C154 (Photocell_State)
+
+
+
+// ------------------------------------------
+// Set up the main loop
+// ------------------------------------------
+If we just started, initialize the loops.
+We set the main loop counter DS3 to 0 so that the first iteration will be DS3 = 1.  
+Note we also set C151 which is a flag that is ON which means sync the schedule to the relays when ready.  Which means, force output as if all schedules transitioned.  All manual overrides are cancelled.  This cleans up when schedules change or are remapped.  It also handles the initial startup where no previous schedule state exist.
+
+
+Rung 4: [SC2] -> (COPY 0 -> DS3) // Init Sequencer
+           (parallel) -> (SET C151) // Request a sync on first boot
+           (parallel) -> (CALL SCHED_ENGINE) // Run scheduler once on boot
+
+
+// ---------------------------------
+// Output & Pulse Engine   (Sequencer)
+// ---------------------------------
+Sequencer Counter (Increments every scan)
+Loop through all 24 output pairs.  There are 48 relays but may are used together so only 24 relay drivers (H-Bridges) need to be used.
+If we are not busy with a pulse, advance to next output pair.
+
+Rung 5:    [NOT C1005] -> (MATH DS3 = DS3 + 1) // Increment Sequencer
+
+// Latch, Sched, & Wrap Logic
+// (This block runs *only* when the sequencer wraps past 24)
+If the loop counter just rapped, then set it back to 1 and call the LATCH_ENGINE subroutine to make the current schedule state be the previous schedule state. Then call SCHED_ENGINE to check all of the schedules.  All of this in preperation for the next loop through the output pairs.
+
+Rung 6:    [CMP DS3 > 24] -> (COPY 1 -> DS3) // Wrap Sequencer to 1
+           (parallel) -> (CALL LATCH_ENGINE) // Latch old states
+           (parallel) -> (CALL SCHED_ENGINE) // Get new states
+           (parallel) -> (RST C152)          // Sync cycle is complete
+
+// Sync Handshake
+// (At the start of a new pass, check if a sync was requested)
+If there was as schedule sync request set by the GO service, make the sync active at the top of the cycle.  This will force all relays to be in sync with the schedule.  Use this when schedules are modified or remapped. This will cancel all manual overrides. It also is used for the first pass after power startup.
+
+
+Rung 7:    [CMP DS3 == 1] [C151] -> (SET C152) // Start "Sync Active" mode
+           (parallel) -> (RST C151) // Clear the request
+
+// ---------------------------------
+// Compute and dereference ptrs (for the *current* DS3 light)
+// ---------------------------------
+pointer to the sched ID, Current State, Previous State, and On/Off requests for this pair of outputs.
+Rung 8:    [Always ON] -> (MATH DS20 = DS3 - 1 + 1000)
+Rung 9:    [Always ON] -> (COPY DS[DS20] -> DS10)
+Rung 10:   [Always ON] -> (MATH DS15 = DS3 + 100)
+Rung 11:   [Always ON] -> (MATH DS16 = DS3 + 200)
+Rung 12:   [Always ON] -> (MATH DS17 = DS3 + 250)
+Rung 13:   [Always ON] -> (MATH DS50 = DS10+ 50)
+
+
+//  Dereference Request Bits
+Rung 14:   [Always ON] -> (COPY C[DS10] -> C1002)   // Get New Sched State (C1-C12)
+Rung 15:   [Always ON] -> (COPY C[DS50] -> C1003)   // Get Prev Sched State (C51-C62)
+Rung 16:   [Always ON] -> (COPY C[DS15] -> C1011)   // Get Physical Relay State (C101-C124)
+Rung 17:   [Always ON] -> (COPY C[DS16] -> C1009)   // Get ReqON
+Rung 18:   [Always ON] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
+
+// == Schedule Transition Check (next two Rungs) ==
+Generate ON Request (on Schedule OFF-to-ON transition)
+So, if the current schedule is ON but the scedule on the previous iteration was OFF then this is a Schedule transition from OFF to ON so we set the ON request.
+The manual override from the GUI may have also set this ON request. Either will cause the output to be pulsed and turn on the relay(s).
+The same occures for the ON to OFF transition.
+
+If a schedule sync is active, ignore previous schedule state and force all relays to the state of the schedules.  Used on first power up cycle, when schedules are changed, or to cancel all manual overrides.
+
+//  "ON" Request Logic  (schedule transition ON to OFF)
+                                               +-- [NOT C1003] --+
+                                               |                 | 
+Rung 19: [NOT C1005]--[CMP DS10 > 0]--[C1002]--+                 +--(COPY SC1 -> C[DS16])
+                                               |                 | 
+                                               +---- [C152] -----+
+
+//  "OFF" Request Logic  (schedule transition OFF to ON)
+                                                   +-- [C1003] --+
+                                                   |             |
+Rung 20: [NOT C1005]--[CMP DS10 > 0]--[NOT C1002]--+             +--(COPY SC1 -> C[DS17])
+                                                   |             |
+                                                   +---- [C152] -+
+
+// == Physical Output Logic ==
+Calculate which 16-bit YD word to use (100, 200, or 300) each corresponds to an output module.
+Note: only one output should be on at a time.  The power supply is rated to drive no more than 4 relays at a time and in some cases the relay driver will drive 3 relays from one output.
+
+Rung 21:   [Always ON] -> (MATH DS80 = (DS3-1)/8+1)
+Rung 22:   [Always ON] -> (MATH DS85 = DS80 * 100)
+
+//  Calculate ON Bitmask
+Rung 23:   [Always ON] -> (MATH DS81 = (DS3-1)%8+1)
+Rung 24:   [Always ON] -> (MATH DS82 = DS81 * 2 - 2)
+Rung 25:   [Always ON] -> (MATH DS83 = 2 ^ DS82)
+
+// Calculate OFF Bitmask
+Rung 26:   [Always ON] -> (MATH DS84 = DS83 * 2)
+
+//  "ON" Action
+Turn on the output and clear the request bits, Declare busy.
+We now do nothing but loop until the timer is complete.
+Rung 27:   [NOT C1005] [C1009] -> (COPY DS83 -> YD[DS85]) // Pulse ON
+           (parallel) -> (COPY SC1 -> C[DS15])     // Set State
+           (parallel) -> (COPY C1020 -> C[DS16])   // Clear ReqON
+           (parallel) -> (COPY C1020 -> C[DS17])   // Clear ReqOFF
+           (parallel) -> (SET C1005)            // Set Busy
+
+//  "OFF" Action
+Turn off the output and clear the request bits.  Declare busy.
+We now do nothing but loop[ until the timer is complete.
+Rung 28:   [NOT C1005] [NOT C1009] [C1010] -> (COPY DS84 -> YD[DS85]) // Pulse OFF
+           (parallel) -> (COPY C1020 -> C[DS15])  // Set State
+           (parallel) -> (COPY C1020 -> C[DS16])  // Clear ReqON
+           (parallel) -> (COPY C1020 -> C[DS17])  // Clear ReqOFF
+           (parallel) -> (SET C1005)           // Set Busy
+
+//  100ms Pulse Timer
+Rung 29:   [C1005] -> (TMR T1 K10) 100ms
+
+//  Stop Pulse, Start Post-Pulse Delay
+Rung 30:   [T1] -> (COPY 0 -> YD[DS85]) // Stop Pulse
+             (parallel) -> (SET C1008)
+
+//  100ms Post-Pulse Delay Timer
+Rung 31:   [C1008] -> (TMR T2 K10)  100ms
+
+//  Clean up Timers and Busy Flag
+Rung 32:   [T2] -> (RST C1005)
+             (parallel) -> (RST C1008)
+
+// ---------------------------------
+// End of Program
+// ---------------------------------
+Rung 33: [Always ON] -> (END)
+
+
+//=================================================================================
+// ---------------------------------
+// 2. Schedule Engine  Subroutine
+// ---------------------------------
+Iterate through all of the schedules and determine if any are active.  
+It is active if at least one span within the schedule is active.
+
+   Result: set active for each schedule C1 - C14.
+
+   We cannot have nested loops or nested subroutines so we have one loop and 
+   implement the inner loop with logic.
+   DS1 - the iterator
+   DS2 - the Span index 1 - 14
+   DS4 - the Schedule index 1 - 12
+
+
+
+//  Start the single, flattened loop (12 * 14 = 168)
+Iterate through the schedules.  
+There is a max of 12 schedules with up to 14 spans per schedule.
+Each Light (actually the H-Bridge that drives a set of relays) 
+must have a reference to a schedule.
+ (This FOR loop uses DS1 as its counter, 1-168)
+Rung 1: [SC2]   -> (Copy 0 = DS1)
+Rung 2: [Always ON]   -> (FOR 168)
+
+// Rung 2: Calculate Schedule Index (1-12) and Span Index (0-13)
+Rung 3:    [Always ON] -> (MATH DS4 = (DS1 - 1) / 14 + 1) // Calc Sched_Index
+Rung 4:    [Always ON] -> (MATH DS2 = (DS1 - 1) % 14)    // Calc Span_Index
+
+//  Reset Temp bits on the *first span* of a schedule
+Rung 5:    [CMP DS2 == 0] -> (RST C1001) // Temp_Span_Active
+           (parallel) -> (RST C1011) // Temp_Span_Start_OK
+           (parallel) -> (RST C1012) // Temp_Span_End_OK
+
+//  Calculate Span Table Pointer
+Rung 6:    [Always ON] -> (MATH DS20 = (DS4-1)*70 + DS2*5 + 100)
+
+// == Day of Week Check (Rungs 5-15) ==
+Rung 7:    [Always ON] -> (MATH DS42 = SD23 - 1)
+Rung 8:    [Always ON] -> (COPY DS[DS20] -> DS49)
+Rung 9:    [Always ON] -> (COPY 0 -> DS41)
+// Check for Sunday (Day 0) & bit 0
+Rung 10:   [CMP DS42 == 0] -> (MATH DH41 = DH49 & 1h)
+// Check for Monday (Day 1) & bit 1
+Rung 11:   [CMP DS42 == 1] -> (MATH DH41 = DH49 & 2h)
+// Check for Tuesday (Day 2) & bit 2
+Rung 12:   [CMP DS42 == 2] -> (MATH DH41 = DH49 & 4h)
+// Check for Wednesday (Day 3) & bit 3
+Rung 13:   [CMP DS42 == 3] -> (MATH DH41 = DH49 & 8h)
+// Check for Thursday (Day 4) & bit 4
+Rung 14:   [CMP DS42 == 4] -> (MATH DH41 = DH49 & 10h)
+// Check for Friday (Day 5) & bit 5
+Rung 15:   [CMP DS42 == 5] -> (MATH DH41 = DH49 & 20h)
+// Check for Saturday (Day 6) & bit 6
+Rung 16:   [CMP DS42 == 6] -> (MATH DH41 = DH49 & 40h)
+// Set/Reset the Temp_Day_OK bit (C1000)
+Check the result (DS41 is the decimal view of DH41)
+Rung 17:   [CMP DS41 > 0] -> (OUT C1000) // Temp_Day_OK
+
+// == Time/Trigger Check (Rungs 16-24) ==
+// Get OnTrig; indicates if this segment is Turned on by Photo Cell or Start Time
+Rung 18:   [Always ON] -> (MATH DS47 = DS20 + 1)
+Rung 19:   [Always ON] -> (COPY DS[DS47] -> DS43)
+// Get OnTime, Note: Time is HHMM 24hr
+Rung 20:   [Always ON] -> (MATH DS47 = DS20 + 2)
+Rung 21:   [Always ON] -> (COPY DS[DS47] -> DS45)
+// Get OffTrig; indicates if is turned off by Photo cell or End Time
+Rung 22:   [Always ON] -> (MATH DS48 = DS20 + 3)
+Rung 23:   [Always ON] -> (COPY DS[DS48] -> DS44)
+// Get OffTime, Note: Time is HHMM 24hr
+Rung 24:   [Always ON] -> (MATH DS48 = DS20 + 4)
+Rung 25:   [Always ON] -> (COPY DS[DS48] -> DS46)
+// Determine if start is ok (beyond start time or photocell on)
+Rung 26:   [C1000] [CMP DS43 == 0] [CMP DS30 >= DS45] -> (SET C1011)
+Rung 27:   [C1000] [CMP DS43 != 0] [C154] -> (SET C1011)
+// Determine if end time is ok (beyond end time or photocell off)
+Rung 28:   [C1000] [CMP DS44 == 0] [CMP DS30 >= DS46] -> (SET C1012)
+Rung 29:   [C1000] [CMP DS44 != 0] [NOT C154] -> (SET C1012)
+// Latch Final Span Active Bit
+// If start is ok and end is not ok, we are inside a span. The span is active.
+Rung 30:   [C1011] [NOT C1012] -> (SET C1001)
+
+// Copy final result on the *last span* of a schedule
+// (Uses DS4, the calculated Schedule Index)
+Rung 31:   [CMP DS2 == 13] -> (COPY C1001 -> C[DS4])
+
+//  Next (ends the 1-168 loop)
+Rung 32: [Always ON] -> (NEXT)
+
+//  Return from Subroutine
+Rung 33: [Always ON] -> (RET)
+
+
+
+================================================================================
+## Subroutine: LATCH_ENGINE
+Plaintext
+
+// ---------------------------------
+// Subroutine: LATCH_ENGINE
+// ---------------------------------
+// For all Schedules, make the current schedule state the previous Schedule
+// Start 12 Schedule Loop
+// (This FOR loop uses DS1 as its counter, 1-12)
+Rung 1: [SC2] -> (Copy 1 -> DS1)
+Rung 2: [Always ON] -> (FOR 12)
+
+// Calculate Pointer to C51-C62
+Rung 3:    [Always ON] -> (MATH DS50 = DS1 + 50)
+
+//  Copy Current State (C1-C12) to Previous State (C51-C62)
+Rung 4:    [Always ON] -> (COPY C[DS1] -> C[DS50])
+
+//  Next Schedule
+Rung 5: [Always ON] -> (NEXT)
+
+// Return from Subroutine
+Rung 6: [Always ON] -> (RET)

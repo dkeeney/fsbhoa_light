@@ -1,34 +1,50 @@
 <?php defined( 'ABSPATH' ) or die( 'Unauthorized Access' ); ?>
 <style>
     /* Styles for the monitor page */
-    #fsbhoa-monitor-app .wrap { /* Target the wrap inside our specific app ID */
-        max-width: 700px; /* Adjust this value as needed */
+    #fsbhoa-monitor-app { /* Target the wrap inside our specific app ID */
+        max-width: 500px; /* Adjust this value as needed */
         margin-left: auto;
         margin-right: auto;
     }
+    /* --- Center align specific columns --- */
+    #fsbhoa-monitor-app .wp-list-table th:nth-child(2),
+    #fsbhoa-monitor-app .wp-list-table td:nth-child(2),
+    #fsbhoa-monitor-app .wp-list-table th:nth-child(3),
+    #fsbhoa-monitor-app .wp-list-table td:nth-child(3) {
+        text-align: center;
+    }
+
     .lighting-monitor-wrapper h1 { margin-bottom: 20px; }
     .wp-list-table th, .wp-list-table td { padding: 8px 10px; vertical-align: middle; }
 
-    /* Override Icon Styles */
-    a.override-link {
-        font-size: 1.8em; /* Make icons slightly larger */
-        text-decoration: none;
-        margin-right: 15px;
-        cursor: pointer;
-        color: #f5a623; /* Yellow/Orange for ON state */
-        opacity: 1;
-        transition: opacity 0.2s ease-in-out;
+    /* --- Lightbulb Status Styles --- */
+    .monitor-bulb {
+        font-size: 2em; /* Makes the bulb large */
+        vertical-align: middle;
+        transition: color 0.3s ease;
     }
-    a.override-link.is-off {
-        color: #000000; /* Black color for OFF state */
+    .monitor-bulb.is-on {
+        color: #f5a623; /* Bright yellow/orange for ON */
+    }
+    .monitor-bulb.is-off {
+        color: #555555; /* Dark gray for OFF */
+    }
+
+    /* --- Override Link Styles --- */
+    a.override-link {
+        font-weight: bold;
+        text-decoration: none;
+        padding: 4px 8px;
     }
     a.override-link.is-disabled {
-        color: #555555; /* Lighter gray when disabled */
+        color: #999;
+        text-decoration: none;
         cursor: not-allowed;
         opacity: 0.6;
     }
-    a.override-link:hover:not(.is-disabled) {
-        opacity: 0.7;
+    a.override-link:not(.is-disabled):hover {
+        background-color: #f0f0f0;
+        border-radius: 3px;
     }
 </style>
 

@@ -1,6 +1,48 @@
 jQuery(document).ready(function($) {
     'use strict';
     console.log('admin-settings.js loaded'); // Debug message
+    
+    let mediaFrame;
+
+    // --- NEW: Media Uploader Button Handler ---
+    $('#fsbhoa-upload-map_image_url-button').on('click', function(e) {
+        e.preventDefault();
+        
+        const $button = $(this);
+        const $input = $('#map_image_url');
+        const $previewWrapper = $('#map_image_url-preview-wrapper');
+
+        // If the frame already exists, open it
+        if (mediaFrame) {
+            mediaFrame.open();
+            return;
+        }
+
+        // Create a new media frame
+        mediaFrame = wp.media({
+            title: 'Select or Upload Map Image',
+            button: {
+                text: 'Use this image'
+            },
+            multiple: false
+        });
+
+        // When an image is selected, run a callback
+        mediaFrame.on('select', function() {
+            // Get the attachment details
+            const attachment = mediaFrame.state().get('selection').first().toJSON();
+            
+            // Update the input field with the URL
+            $input.val(attachment.url);
+            
+            // Update the preview image
+            $previewWrapper.html('<img src="' + attachment.url + '" style="max-width: 400px; height: auto; border: 1px solid #ddd;">');
+        });
+
+        // Finally, open the frame
+        mediaFrame.open();
+    });
+
 
     // --- Save Settings Button Handler ---
     $('#fsbhoa-save-lighting-settings-button').on('click', function() {
@@ -35,7 +77,7 @@ jQuery(document).ready(function($) {
             .done(function(response) {
                 if (response.success) {
                     feedbackSpan.text('Success! Settings saved. Config file updated.').css('color', 'green');
-                     setTimeout(function() { feedbackSpan.fadeOut(); }, 3000);
+                      setTimeout(function() { feedbackSpan.fadeOut(); }, 3000);
                 } else {
                     feedbackSpan.text('Error: ' + (response.data || 'Unknown error')).css('color', 'red');
                 }
@@ -171,7 +213,7 @@ jQuery(document).ready(function($) {
              cmdFeedbackSpan.text(`Failed to send ${command} command (AJAX error).`).css('color', 'red');
              console.error(`Command '${command}' AJAX failed:`, textStatus, errorThrown); // Log AJAX error
              checkServiceStatus(); // Re-enable buttons based on last known status
-        });
+         });
     });
 
     // Initial status check on page load, only if the status span exists
