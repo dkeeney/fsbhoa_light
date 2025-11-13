@@ -220,141 +220,179 @@ func PushConfigurationToPLCs(cfg Config, data *FullConfigurationData) error {
 }
 
 
-// PulseZone 
+// PulseZone
 func PulseZone(cfg Config, configData *FullConfigurationData, zoneID int, state string) error {
-	log.Printf("Received override for Zone %d. Finding loop index...", zoneID)
-	var plcHost string
-	var loopIndex = -1
+	log.Printf("Received override for Zone %d. Finding ALL associated lights...", zoneID)
+
+	// --- Create a list of all lights to pulse ---
+	type pulseTarget struct {
+		host      string
+		loopIndex int
+		outputs   []string // For logging
+	}
+	var targets []pulseTarget
 
 	for _, mapping := range configData.Mappings {
 		for _, linkedZoneID := range mapping.LinkedZoneIDs {
 			if linkedZoneID == zoneID {
-				plcHost = cfg.PLCs[mapping.PLCID]
-				
-				loopIndex = calculateLoopIndex(mapping.PLCOutputs[0]) // Use new helper
-				break
-			}
-		}
-		if plcHost != "" {
-			break
-		}
-	}
-
-	if plcHost == "" {
-		return fmt.Errorf("no host found for ZoneID %d", zoneID)
-	}
-	if loopIndex == -1 {
-		return fmt.Errorf("could not calculate loop index for ZoneID %d", zoneID)
-	}
-
-	onCbitAddr, _ := cBitToModbusAddress(201 + loopIndex)
-	offCbitAddr, _ := cBitToModbusAddress(251 + loopIndex)
-	var addrToSet uint16
-	var stateStr string
-	if state == "on" {
-		addrToSet = onCbitAddr
-		stateStr = fmt.Sprintf("RequestON (C%d)", 201+loopIndex)
-	} else {
-		addrToSet = offCbitAddr
-		stateStr = fmt.Sprintf("RequestOFF (C%d)", 251+loopIndex)
-	}
-	log.Printf("Sending SET for %s to PLC %s for Zone %d (Loop %d)", stateStr, plcHost, zoneID, loopIndex+1)
-	return setPLCBit(plcHost, addrToSet)
-}
-
-// cBitToModbusAddress 
-func cBitToModbusAddress(cBit int) (uint16, error) {
-	// On the CLICK PLUS, C bits start at Modbus address 0.
-	// C1 is address 0. C2 is address 1, etc.
-	if cBit < 1 {
-		return 0, fmt.Errorf("c bit %d is out of supported range", cBit)
-	}
-	// C1 -> 0, C101 -> 100, C151 -> 150, C201 -> 200
-	return uint16(cBit - 1), nil
-}
-
-// ReadStatusFromPLCs 
-func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[string]interface{}, error) {
-	log.Println("Reading real-time status from all PLCs.")
-	fullStatus := make(map[string]interface{})
-
-	loopIndexToKey := make(map[int]string)
-	plcLoopIndices := make(map[int][]int)
-
-	for _, mapping := range configData.Mappings {
-		if len(mapping.PLCOutputs) == 0 {
-			continue
-		}
-		loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
-		if loopIndex == -1 {
-			continue
-		}
-		
-		yName := mapping.PLCOutputs[0]
-		uniqueKey := fmt.Sprintf("PLC%d-%s", mapping.PLCID, yName)
-		loopIndexToKey[loopIndex] = uniqueKey
-		plcLoopIndices[mapping.PLCID] = append(plcLoopIndices[mapping.PLCID], loopIndex)
-	}
-
-	for plcID, host := range cfg.PLCs {
-		log.Printf("Polling PLC %d at %s", plcID, host)
-		handler := modbus.NewTCPClientHandler(host)
-		handler.Timeout = 5 * time.Second
-		client := modbus.NewClient(handler)
-		err := handler.Connect()
-		if err != nil {
-			log.Printf("  - ERROR connecting to PLC %d for status read: %v", plcID, err)
-			continue
-		}
-		defer handler.Close()
-
-		// Read the C101-C124 State bits
-		stateBitsAddr, _ := cBitToModbusAddress(101)
-		numStateBits := uint16(24) // 24 lights
-		resultBytes, err := client.ReadCoils(stateBitsAddr, numStateBits)
-		if err != nil {
-			log.Printf("  - Error reading state bits (C101-C124) on PLC %d: %v", plcID, err)
-		} else {
-			for i := 0; i < int(numStateBits); i++ {
-				isForThisPLC := false
-				for _, plcLoop := range plcLoopIndices[plcID] {
-					if plcLoop == i {
-						isForThisPLC = true
-						break
-					}
-				}
-				if !isForThisPLC {
-					continue
-				}
-				uiKey, ok := loopIndexToKey[i]
+				// Found a match. Get its info.
+				host, ok := cfg.PLCs[mapping.PLCID]
 				if !ok {
-					continue
+					log.Printf("Warning: Skipping pulse for Zone %d. Mapping %d has invalid PLCID %d.", zoneID, mapping.ID, mapping.PLCID)
+					continue // Skip this mapping
 				}
-				byteIndex := i / 8
-				bitIndex := uint(i % 8)
-				if len(resultBytes) > byteIndex {
-					bitValue := (resultBytes[byteIndex] >> bitIndex) & 1
-					fullStatus[uiKey] = (bitValue == 1)
-				}
-			}
-		}
 
-		// Read Photocell (C154 on PLC 1)
-		if plcID == 1 {
-			photocellAddr, _ := cBitToModbusAddress(154)
-			result, err := client.ReadCoils(photocellAddr, 1)
-			if err != nil {
-				log.Printf("  - Error reading photocell (C154) on PLC 1: %v", err)
-			} else if len(result) > 0 {
-				fullStatus["Photocell"] = (result[0] & 1) == 1
-			} else {
-				log.Printf("  - Warning: Received empty result reading photocell (C154) on PLC 1")
+				if len(mapping.PLCOutputs) == 0 {
+					continue // No outputs defined
+				}
+
+				loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
+				if loopIndex == -1 {
+					log.Printf("Warning: Skipping pulse for Zone %d. Mapping %d has invalid output %s.", zoneID, mapping.ID, mapping.PLCOutputs[0])
+					continue // Skip this mapping
+				}
+
+				targets = append(targets, pulseTarget{host: host, loopIndex: loopIndex, outputs: mapping.PLCOutputs})
+
+				// Do NOT break; continue searching for more mappings for this zone
 			}
 		}
 	}
 
-	return fullStatus, nil
+	if len(targets) == 0 {
+		return fmt.Errorf("no valid, mapped lights found for ZoneID %d", zoneID)
+	}
+
+	log.Printf("Zone %d is linked to %d lights. Sending pulses...", zoneID, len(targets))
+
+	var lastErr error
+
+	// --- Iterate and pulse every light ---
+	for _, target := range targets {
+		onCbitAddr, _ := cBitToModbusAddress(201 + target.loopIndex)
+		offCbitAddr, _ := cBitToModbusAddress(251 + target.loopIndex)
+		var addrToSet uint16
+		var stateStr string
+
+		if state == "on" {
+			addrToSet = onCbitAddr
+			stateStr = fmt.Sprintf("RequestON (C%d)", 201+target.loopIndex)
+		} else {
+			addrToSet = offCbitAddr
+			stateStr = fmt.Sprintf("RequestOFF (C%d)", 251+target.loopIndex)
+		}
+
+		log.Printf("  -> Pulsing %s (%s) on PLC %s (Loop %d)", stateStr, target.outputs[0], target.host, target.loopIndex+1)
+
+		// Send the pulse
+		err := setPLCBit(target.host, addrToSet)
+		if err != nil {
+			log.Printf("  -> ERROR pulsing %s: %v", target.host, err)
+			lastErr = err // Store the last error we saw
+		}
+	}
+
+	return lastErr // Return nil if no errors, or the last error encountered
 }
+
+
+// cBitToModbusAddress
+func cBitToModbusAddress(cBit int) (uint16, error) {
+    // On CLICK PLC, C Control Relays start at Modbus address 16384 (0x4000).
+    const cBitBaseAddress = 16384
+
+    if cBit < 1 {
+        return 0, fmt.Errorf("c bit %d is out of supported range", cBit)
+    }
+    
+    // C1 -> 16384, C101 -> 16484
+    return uint16(cBitBaseAddress + cBit - 1), nil
+}
+
+// ReadStatusFromPLCs
+func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[string]interface{}, error) {
+    log.Println("Reading real-time status from all PLCs.")
+    fullStatus := make(map[string]interface{})
+
+    // FIX: Use a string key "PLC_ID-LoopIndex" to avoid collisions between PLCs
+    loopIndexToMapKey := make(map[string]string)
+    plcLoopIndices := make(map[int][]int)
+
+    for _, mapping := range configData.Mappings {
+        if len(mapping.PLCOutputs) == 0 {
+            continue
+        }
+        loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
+        if loopIndex == -1 {
+            continue
+        }
+
+        yName := mapping.PLCOutputs[0]
+        uniqueKey := fmt.Sprintf("PLC%d-%s", mapping.PLCID, yName)
+        
+        // FIX: Create a composite key for internal lookup
+        // Example: "1-0" for PLC 1, Index 0
+        lookupID := fmt.Sprintf("%d-%d", mapping.PLCID, loopIndex)
+        
+        loopIndexToMapKey[lookupID] = uniqueKey
+        plcLoopIndices[mapping.PLCID] = append(plcLoopIndices[mapping.PLCID], loopIndex)
+    }
+
+    for plcID, host := range cfg.PLCs {
+        // ... (Connection logic remains the same) ...
+        log.Printf("Polling PLC %d at %s", plcID, host)
+        handler := modbus.NewTCPClientHandler(host)
+        handler.Timeout = 5 * time.Second
+        client := modbus.NewClient(handler)
+        err := handler.Connect()
+        if err != nil {
+            log.Printf("  - ERROR connecting to PLC %d for status read: %v", plcID, err)
+            continue
+        }
+        defer handler.Close()
+
+        // Read the C101-C124 State bits
+        // FIX: Ensure we use the Offset Address 16384 here too
+        stateBitsAddr, _ := cBitToModbusAddress(101) 
+        numStateBits := uint16(24) // 24 lights
+        resultBytes, err := client.ReadCoils(stateBitsAddr, numStateBits)
+        
+        if err != nil {
+            log.Printf("  - Error reading state bits (C101-C124) on PLC %d: %v", plcID, err)
+        } else {
+            for i := 0; i < int(numStateBits); i++ {
+                // FIX: Look up using the composite key "PLCID-LoopIndex"
+                lookupID := fmt.Sprintf("%d-%d", plcID, i)
+                
+                uiKey, ok := loopIndexToMapKey[lookupID]
+                if !ok {
+                    continue // This index isn't mapped for this specific PLC
+                }
+
+                byteIndex := i / 8
+                bitIndex := uint(i % 8)
+                if len(resultBytes) > byteIndex {
+                    bitValue := (resultBytes[byteIndex] >> bitIndex) & 1
+                    fullStatus[uiKey] = (bitValue == 1)
+                }
+            }
+        }
+
+        // Read Photocell (C154 on PLC 1)
+        if plcID == 1 {
+            photocellAddr, _ := cBitToModbusAddress(154)
+            result, err := client.ReadCoils(photocellAddr, 1)
+            if err != nil {
+                log.Printf("  - Error reading photocell (C154) on PLC 1: %v", err)
+            } else if len(result) > 0 {
+                fullStatus["Photocell"] = (result[0] & 1) == 1
+            }
+        }
+    }
+
+    return fullStatus, nil
+}
+
 
 // --- Helper Functions ---
 

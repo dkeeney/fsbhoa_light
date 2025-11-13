@@ -31,6 +31,13 @@ function fsbhoa_config_register_rest_routes() {
         'callback' => 'fsbhoa_lighting_get_full_config',
         'permission_callback' => 'fsbhoa_lighting_api_key_permission_check' // Use API key auth
     ] );
+
+    // Endpoint to view full-config sent to the Go Service
+    register_rest_route( 'fsbhoa-lighting/v1', '/debug-config', [
+        'methods' => 'GET',
+        'callback' => 'fsbhoa_lighting_get_full_config', // Re-uses the EXACT same logic
+        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+    ] );
 }
 add_action( 'rest_api_init', 'fsbhoa_config_register_rest_routes' );
 

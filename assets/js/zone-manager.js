@@ -94,6 +94,31 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // --- Debug Download Button Handler ---
+    const debugBtn = document.getElementById('fsbhoa-debug-download-btn');
+    if (debugBtn) {
+        debugBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            
+            // Call the new debug endpoint
+            fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/debug-config', {
+                headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Create a downloadable file from the JSON
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(data, null, 2));
+                const downloadAnchorNode = document.createElement('a');
+                downloadAnchorNode.setAttribute("href", dataStr);
+                downloadAnchorNode.setAttribute("download", "fsbhoa_lighting_debug.json");
+                document.body.appendChild(downloadAnchorNode); // required for firefox
+                downloadAnchorNode.click();
+                downloadAnchorNode.remove();
+            })
+            .catch(err => alert('Error downloading config: ' + err));
+        });
+    }
+
     // --- Zone Manager ---
     const zoneApp = document.getElementById('fsbhoa-zone-manager-app');
     if (zoneApp) {
@@ -169,6 +194,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }, 1000);
             }
         });
+        
     }
 
     // --- Schedule Manager ---

@@ -70,13 +70,19 @@ function fsbhoa_lighting_create_or_update_schedule(WP_REST_Request $request) {
         if (!empty($spans)) {
             foreach ($spans as $span) {
                 $days = is_array($span['days_of_week']) ? array_map('sanitize_key', $span['days_of_week']) : [];
+                $off_time = ($span['off_trigger'] === 'TIME') ? sanitize_text_field($span['off_time']) : null;
+
+                // if off_time is 00:00 assume they mean "End of Day" (23:59), otherwise the span is invalid.
+                if ($span['off_trigger'] === 'TIME' && $off_time === '00:00') {
+                    $off_time = '23:59';   
+                }
                 $result = $wpdb->insert($spans_table, [
                     'schedule_id'  => $schedule_id,
                     'days_of_week' => wp_json_encode($days),
                     'on_trigger'   => sanitize_text_field($span['on_trigger']),
                     'on_time'      => ($span['on_trigger'] === 'TIME') ? sanitize_text_field($span['on_time']) : null,
                     'off_trigger'  => sanitize_text_field($span['off_trigger']),
-                    'off_time'     => ($span['off_trigger'] === 'TIME') ? sanitize_text_field($span['off_time']) : null,
+                    'off_time'     => $off_time,
                 ]);
                 if ($result === false) throw new Exception('Failed to save a time span: ' . $wpdb->last_error);
             }

@@ -84,6 +84,7 @@
         <h1>Lighting Zone Management</h1>
         <a href="#" id="add-new-zone-btn" class="page-title-action">Add New Zone</a>
         <a href="#" id="fsbhoa-print-config-btn" class="page-title-action" style="background: #007cba; color: white; float: right;">Print Configuration</a>
+        <a href="#" id="fsbhoa-debug-download-btn" class="page-title-action" style="margin-right: 10px; float: right;">Download JSON</a>
         <div id="zones-list-container"></div>
         <div id="zone-form-container" style="display: none;"></div>
         <button id="save-zone-assignments-btn" class="button button-primary" style="margin-top: 20px; display: none;">Save Schedule Assignments</button> </div>
