@@ -112,7 +112,7 @@ function renderSchedulesTable(container, allSchedules) {
 };
 
 function renderSpanRow(span = {}) {
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     const dayCheckboxes = days.map(day => {
         const isChecked = span.days_of_week && span.days_of_week.includes(day);
         return `<label title="${day}" style="margin: 0 4px; font-size: 0.9em; white-space: nowrap;"><input type="checkbox" name="days_of_week" value="${day}" ${isChecked ? 'checked' : ''}>${day.substring(0,1)}</label>`;
