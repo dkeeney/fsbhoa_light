@@ -1,4 +1,5 @@
-This is a complete, AI-readable text listing of the entire ladder logic program 
+fsbhoa@access:~/fsbhoa_light$ cat LadderLogicForAI.txt
+This is a complete, AI-readable text listing of the entire ladder logic program
 (all rungs in all three program files) based on our final design.
 Save it for future reference when working with AI.
 
@@ -32,13 +33,14 @@ Rung 1: [Always ON] -> (MATH DS30 = (SD24 * 100) + SD25)
 Rung 2: [Always ON] -> (RST C1020) // Always_OFF bit
 
 // === Master/Slave Logic (Photocell is remote) ===
-// We test the 4th octet of the IP Address (SC144) to see if it is 61. 
-// If it is 61 then we are the master and we send X001 to C154.
+// If I am the master and we send X001 to C154.
 // If I am the Slave, read C154 from the Master PLC (IP 192.168.42.61)
-// Note that the RECV instruction calls this the "Server (Slave)" 
-// but it is the IP address of the side that has the photo cell which 
-// is down at the Cabana.  
+// Note that the RECV instruction calls this the "Server (Slave)"
+// but it is the IP address of the side that has the photo cell which
+// is down at the Cabana.
 // (SC4 is a 0.2s clock, so we poll 5x per second)
+//
+// When copying this Logic from Lodge to Cabana, change this Rung.
 // If Cabana (Master) set C153
 // If Lodge  (Slave)  reset C153
 
@@ -58,10 +60,10 @@ Rung 5:  [NOT C153] [SC4] -> (RECV)  Via WLAN IP: 192.168.42.61
 // Set up the main loop
 // ------------------------------------------
 // If we just started, initialize the loops.
-// We set the main loop counter DS3 to 0 so that the first iteration will be DS3 = 1.  
-// Note we also set C151 which is a flag that is ON which means sync the schedule to 
-// the relays when ready.  Which means, force output as if all schedules transitioned.  
-// All manual overrides are cancelled.  This cleans up when schedules change or are 
+// We set the main loop counter DS3 to 0 so that the first iteration will be DS3 = 1.
+// Note we also set C151 which is a flag that is ON which means sync the schedule to
+// the relays when ready.  Which means, force output as if all schedules transitioned.
+// All manual overrides are cancelled.  This cleans up when schedules change or are
 // remapped.  It also handles the initial startup where no previous schedule state exist.
 
 
@@ -74,17 +76,19 @@ Rung 6: [SC2] -> (COPY 0 -> DS3) // Init Sequencer
 // Output & Pulse Engine   (Sequencer)
 // ---------------------------------
 // Sequencer Counter (Increments every scan)
-// Loop through all 24 output pairs.  There are 48 relays but may are used together so 
+// Loop through all 24 output pairs.  There are 48 relays but may are used together so
 // only 24 relay drivers (H-Bridges) need to be used.
-// If we are not busy with a pulse, advance to next output pair.
+// For debugging, If we want to hold the loop (DS3) on one output pair, set C1022 then set DS3.
+// If we are not busy with a pulse [NOT C1005], advance to next output pair.
+// In order to ensure that timer T2 has a chance to clear, we check [NOT T2].
 
-Rung 7:    [NOT C1005] -> (MATH DS3 = DS3 + 1) // Increment Sequencer
+Rung 7: [NOT C1022] [NOT C1005] [NOT T2] -> (MATH DS3 = DS3 + 1) // Increment Sequencer
 
 // Latch, Sched, & Wrap Logic
 // (This block runs *only* when the sequencer wraps past 24)
-// If the loop counter just rapped, then set it back to 1 and call the LATCH_ENGINE 
-// subroutine to make the current schedule state be the previous schedule state. 
-// Then call SCHED_ENGINE to check all of the schedules.  All of this in preperation 
+// If the loop counter just rapped, then set it back to 1 and call the LATCH_ENGINE
+// subroutine to make the current schedule state be the previous schedule state.
+// Then call SCHED_ENGINE to check all of the schedules.  All of this in preperation
 // for the next loop through the output pairs.
 
 Rung 8:    [CMP DS3 > 24] -> (COPY 1 -> DS3) // Wrap Sequencer to 1
@@ -94,9 +98,9 @@ Rung 8:    [CMP DS3 > 24] -> (COPY 1 -> DS3) // Wrap Sequencer to 1
 
 // Sync Handshake
 // (At the start of a new pass, check if a sync was requested)
-// If there was as schedule sync request set by the GO service, make the sync active 
-// at the top of the cycle.  This will force all relays to be in sync with the schedule.  
-// Use this when schedules are modified or remapped. This will cancel all manual overrides. 
+// If there was as schedule sync request set by the GO service, make the sync active
+// at the top of the cycle.  This will force all relays to be in sync with the schedule.
+// Use this when schedules are modified or remapped. This will cancel all manual overrides.
 // It also is used for the first pass after power startup.
 
 
@@ -106,7 +110,7 @@ Rung 9:    [CMP DS3 == 1] [C151] -> (SET C152) // Start "Sync Active" mode
 // ---------------------------------
 // Compute and dereference ptrs (for the *current* DS3 light)
 // ---------------------------------
-// pointer to the sched ID, Current State, Previous State, and On/Off requests for 
+// pointer to the sched ID, Current State, Previous State, and On/Off requests for
 // this pair of outputs.
 Rung 10:   [Always ON] -> (MATH DS20 = DS3 - 1 + 1000)
 Rung 11:   [Always ON] -> (COPY DS[DS20] -> DS10)
@@ -124,21 +128,21 @@ Rung 19:   [Always ON] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 
 // == Schedule Transition Check (next two Rungs) ==
 // Generate ON Request (on Schedule OFF-to-ON transition)
-// So, if the current schedule is ON but the scedule on the previous iteration was OFF 
+// So, if the current schedule is ON but the scedule on the previous iteration was OFF
 // then this is a Schedule transition from OFF to ON so we set the ON request.
-// The manual override from the GUI may have also set this ON request. Either will 
+// The manual override from the GUI may have also set this ON request. Either will
 // cause the output to be pulsed and turn on the relay(s).
 // The same occures for the ON to OFF transition.
 //
-// If a schedule sync is active, ignore previous schedule state and force all 
-// relays to the state of the schedules.  Used on first power up cycle, when schedules 
+// If a schedule sync is active, ignore previous schedule state and force all
+// relays to the state of the schedules.  Used on first power up cycle, when schedules
 // are changed, or to cancel all manual overrides.
 //
 //  "ON" Request Logic  (schedule transition ON to OFF)
                                                +-- [NOT C1003] --+
-                                               |                 | 
+                                               |                 |
 Rung 20: [NOT C1005]--[CMP DS10 > 0]--[C1002]--+                 +--(COPY SC1 -> C[DS16])
-                                               |                 | 
+                                               |                 |
                                                +---- [C152] -----+
 
 //  "OFF" Request Logic  (schedule transition OFF to ON)
@@ -149,24 +153,25 @@ Rung 21: [NOT C1005]--[CMP DS10 > 0]--[NOT C1002]--+             +--(COPY SC1 ->
                                                    +---- [C152] -+
 
 // == Physical Output Logic ==
-// Calculate which 16-bit YD word to use (100, 200, or 300) each corresponds 
+// Calculate which 16-bit YD word to use (100, 200, or 300) each corresponds
 // to an output module.
-// Note: only one output should be on at a time.  The power supply is rated to 
-// drive no more than 4 relays at a time and in some cases the relay driver will 
+// Note: only one output should be on at a time.  The power supply is rated to
+// drive no more than 4 relays at a time and in some cases the relay driver will
 // drive 3 relays from one output.
 
 Rung 22:   [Always ON] -> (MATH DS80 = (DS3-1)/8+1)
 Rung 23:   [Always ON] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
 Rung 24:   [Always ON] -> (COPY DS82 -> DH82)
 Rung 25:   [Always ON] -> (COPY 1h  -> DH81)
-Rung 26:   [Always ON] -> (MATH DS83 = LSH(DH81, DH82)  // ON bit mask
-Rung 27:   [Always ON] -> (MATH DS84 = LSH(DH83, 1h)    // OFF bit mask
+Rung 26:   [Always ON] -> (MATH DH83 = LSH(DH81, DH82)  // ON bit mask
+Rung 27:   [Always ON] -> (MATH DH84 = LSH(DH83, 1h)    // OFF bit mask
+// NOTE: technically, we could use DH83 and DH84 below rather than DS83 and DS84.
 
 
 //  "ON" Action
 // Turn on the output and clear the request bits, Declare busy.
 // We now do nothing but loop until the timer is complete.
-Rung 28:   [NOT C1005] [C1009] -> (COPY DH83 -> YD[DS80]) // Pulse ON
+Rung 28:   [NOT C1005] [C1009] -> (COPY DS83 -> YD[DS80]) // Pulse ON
                     (parallel) -> (COPY SC1 -> C[DS15])     // Set State
                     (parallel) -> (COPY C1020 -> C[DS16])   // Clear ReqON
                     (parallel) -> (COPY C1020 -> C[DS17])   // Clear ReqOFF
@@ -175,7 +180,7 @@ Rung 28:   [NOT C1005] [C1009] -> (COPY DH83 -> YD[DS80]) // Pulse ON
 //  "OFF" Action
 // Turn off the output and clear the request bits.  Declare busy.
 // We now do nothing but loop[ until the timer is complete.
-Rung 29:   [NOT C1005] [NOT C1009] [C1010] -> (COPY DH84 -> YD[DS80]) // Pulse OFF
+Rung 29:   [NOT C1005] [NOT C1009] [C1010] -> (COPY DS84 -> YD[DS80]) // Pulse OFF
                                 (parallel) -> (COPY C1020 -> C[DS15])  // Set State
                                 (parallel) -> (COPY C1020 -> C[DS16])  // Clear ReqON
                                 (parallel) -> (COPY C1020 -> C[DS17])  // Clear ReqOFF
@@ -194,6 +199,8 @@ Rung 32:   [C1008] -> (TMR T2 K10)  100ms
 //  Clean up Timers and Busy Flag
 Rung 33:   [T2] -> (RST C1005)
              (parallel) -> (RST C1008)
+             // note that after clearing C1008, Timer T2 will not clear
+             //      until the next empty pass.
 
 // ---------------------------------
 // End of Program
@@ -205,12 +212,12 @@ Rung 34: [Always ON] -> (END)
 // ---------------------------------
 // 2. Schedule Engine  Subroutine
 // ---------------------------------
-// Iterate through all of the schedules and determine if any are active.  
+// Iterate through all of the schedules and determine if any are active.
 // It is active if at least one span within the schedule is active.
 //
 // Result: set active for each schedule C1 - C14.
 //
-// We cannot have nested loops or nested subroutines so we have one loop and 
+// We cannot have nested loops or nested subroutines so we have one loop and
 // implement the inner loop with logic.
 // DS1 - the iterator
 // DS2 - the Span index 1 - 14
@@ -219,9 +226,9 @@ Rung 34: [Always ON] -> (END)
 
 
 //  Start the single, flattened loop (12 * 14 = 168)
-// Iterate through the schedules.  
+// Iterate through the schedules.
 // There is a max of 12 schedules with up to 14 spans per schedule.
-// Each Light (actually the H-Bridge that drives a set of relays) 
+// Each Light (actually the H-Bridge that drives a set of relays)
 // must have a reference to a schedule.
 //  (This FOR loop uses DS1 as its counter, 1-168)
 Rung 1: [Always ON]   -> (COPY 1 -> DS1)
@@ -288,7 +295,7 @@ Rung 31:   [C1011] [C1012] -> (SET C1001)
 Rung 32:   [CMP DS2 == 13] -> (COPY C1001 -> C[DS4])
 
 //  Next (ends the 1-168 loop)
-Rung 33:   [Always ON -> (MATH DS1 = DS1 + 1)
+Rung 33:   [Always ON] -> (MATH DS1 = DS1 + 1)
 Rung 34:   [Always ON] -> (NEXT)
 
 //  Return from Subroutine
@@ -321,3 +328,4 @@ Rung 5: [Always ON] -> (NEXT)
 
 // Return from Subroutine
 Rung 5: [Always ON] -> (RET)
+

@@ -203,6 +203,20 @@ function renderMappingsTable(container, allMappings) {
             <td>${Array.isArray(map.plc_outputs) ? map.plc_outputs.join(', ') : ''}</td>
             <td>${Array.isArray(map.relays) ? map.relays.join(', ') : ''}</td>
             <td>
+                <div style="margin-bottom: 5px; display: flex; gap: 4px;">
+                    <button type="button" class="button test-btn" 
+                        data-id="${map.id}" 
+                        data-state="on" 
+                        style="color: green; border-color: green; padding: 0 6px; font-size: 10px; min-height: 22px; line-height: 20px; height: auto;">
+                        ON
+                    </button>
+                    <button type="button" class="button test-btn" 
+                        data-id="${map.id}" 
+                        data-state="off" 
+                        style="color: red; border-color: red; padding: 0 6px; font-size: 10px; min-height: 22px; line-height: 20px; height: auto;">
+                        OFF
+                    </button>
+                </div>
                 <a href="#" class="edit-mapping-link" data-mapping-id="${map.id}">Edit</a> |
                 <a href="#" class="delete-mapping-link" data-mapping-id="${map.id}" style="color: #b32d2e;">Delete</a>
             </td>

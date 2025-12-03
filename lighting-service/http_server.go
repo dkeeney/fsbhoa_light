@@ -35,6 +35,7 @@ func (app *App) RunServer() error {
 	router.POST("/sync", app.handleSyncTrigger)
 	router.POST("/override/zone/:id/:state", app.handleOverride)
 	router.GET("/status", app.handleStatus)
+        router.POST("/test/mapping/:id/:state", app.handleTestMapping)
 
 	// Use ListenPort from config
 	return http.ListenAndServe(app.Config.ListenPort, router)
@@ -214,4 +215,29 @@ func (app *App) syncAllPLCsTime() {
 			log.Printf("ERROR: Failed to sync time for PLC %d: %v", plcID, err)
 		}
 	}
+}
+
+
+func (app *App) handleTestMapping(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	mappingID, _ := strconv.Atoi(ps.ByName("id"))
+	state := ps.ByName("state")
+	
+	// Fetch config to ensure we have latest mappings
+	configData, err := FetchConfigurationFromAPI(app.Config)
+	if err != nil {
+		http.Error(w, "Failed to fetch config", http.StatusInternalServerError)
+		return
+	}
+
+	if app.isSimulationMode() {
+		log.Println("Simulation: Test Pulse ignored.")
+	} else {
+		err = PulseMapping(app.Config, configData, mappingID, state)
+	}
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }

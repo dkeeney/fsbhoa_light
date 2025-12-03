@@ -526,3 +526,53 @@ func setPLCBit(host string, address uint16) error {
 	return nil
 }
 
+
+
+// PulseMapping triggers a specific mapping (single light) for testing hardware.
+func PulseMapping(cfg Config, configData *FullConfigurationData, mappingID int, state string) error {
+	log.Printf("Received TEST command for Mapping ID %d...", mappingID)
+
+	var targetMapping *FullConfigMapping
+	for _, m := range configData.Mappings {
+		if m.ID == mappingID {
+			targetMapping = &m
+			break
+		}
+	}
+
+	if targetMapping == nil {
+		return fmt.Errorf("mapping ID %d not found", mappingID)
+	}
+
+	if len(targetMapping.PLCOutputs) == 0 {
+		return fmt.Errorf("mapping ID %d has no outputs defined", mappingID)
+	}
+
+	host, ok := cfg.PLCs[targetMapping.PLCID]
+	if !ok {
+		return fmt.Errorf("invalid PLCID %d", targetMapping.PLCID)
+	}
+
+	loopIndex := calculateLoopIndex(targetMapping.PLCOutputs[0])
+	if loopIndex == -1 {
+		return fmt.Errorf("invalid output %s", targetMapping.PLCOutputs[0])
+	}
+
+	// Calculate addresses
+	onCbitAddr, _ := cBitToModbusAddress(201 + loopIndex)
+	offCbitAddr, _ := cBitToModbusAddress(251 + loopIndex)
+	var addrToSet uint16
+	var stateStr string
+
+	if state == "on" {
+		addrToSet = onCbitAddr
+		stateStr = fmt.Sprintf("RequestON (C%d)", 201+loopIndex)
+	} else {
+		addrToSet = offCbitAddr
+		stateStr = fmt.Sprintf("RequestOFF (C%d)", 251+loopIndex)
+	}
+
+	log.Printf("  -> TEST PULSE: %s on PLC %s", stateStr, host)
+	return setPLCBit(host, addrToSet)
+}
+

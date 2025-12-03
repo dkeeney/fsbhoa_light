@@ -38,6 +38,13 @@ const assignmentApi = {
         body: JSON.stringify(data)
     })
 };
+const testApi = {
+    send: (id, state) => fetch(apiBaseUrl + 'test-mapping', { 
+        method: 'POST', 
+        headers: apiPostHeaders, 
+        body: JSON.stringify({ mapping_id: id, state: state }) 
+    })
+};
 
 // --- Global Data Store ---
 let allZones = [];
@@ -194,6 +201,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 }, 1000);
             }
         });
+
+        
         
     }
 
@@ -290,6 +299,38 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (confirm('Are you sure?')) { await mappingApi.delete(mappingId); loadAllConfigData(); }
             } else if (e.target.matches('#cancel-mapping-edit-btn')) {
                 mappingFormContainer.style.display = 'none'; mappingListContainer.style.display = 'block'; addNewMappingBtn.style.display = 'inline-block';
+            } else if (e.target.matches('.test-btn')) {
+                e.preventDefault();
+                const btn = e.target;
+                const id = btn.dataset.id;
+                const state = btn.dataset.state;
+                const originalText = btn.textContent;
+
+                // Visual feedback
+                btn.disabled = true;
+                btn.textContent = '...';
+
+                try {
+                    const res = await testApi.send(id, state);
+                    const json = await res.json();
+                    
+                    if (res.ok) {
+                        btn.textContent = 'OK';
+                        console.log('Test successful:', json);
+                    } else {
+                        throw new Error(json.message || 'Failed');
+                    }
+                } catch (err) {
+                    console.error(err);
+                    btn.textContent = 'ERR';
+                    alert('Test failed: ' + err.message);
+                }
+
+                // Reset button after 1 second
+                setTimeout(() => { 
+                    btn.disabled = false; 
+                    btn.textContent = originalText; 
+                }, 1000);
             }
         });
 

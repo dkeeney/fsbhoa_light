@@ -19,6 +19,12 @@ function fsbhoa_monitor_register_rest_routes() {
         'callback' => 'fsbhoa_lighting_send_override_command',
         'permission_callback' => function () { return current_user_can( 'manage_options' ); }
     ) );
+
+    register_rest_route( 'fsbhoa-lighting/v1', '/test-mapping', array(
+        'methods'  => 'POST',
+        'callback' => 'fsbhoa_lighting_send_test_mapping',
+        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+    ) );
 }
 add_action( 'rest_api_init', 'fsbhoa_monitor_register_rest_routes' );
 
@@ -123,3 +129,22 @@ function fsbhoa_lighting_trigger_go_service_sync() {
         'blocking'  => false, // Return immediately, don't wait for the response
     ) );
 }
+
+
+function fsbhoa_lighting_send_test_mapping( WP_REST_Request $request ) {
+    $params = $request->get_json_params();
+    $mapping_id = intval($params['mapping_id']);
+    $state = sanitize_key($params['state']);
+
+    $options = get_option('fsbhoa_lighting_settings');
+    $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
+    $service_url = sprintf('http://localhost:%d/test/mapping/%d/%s', $port, $mapping_id, $state);
+
+    $response = wp_remote_post( $service_url, array('timeout' => 5) );
+
+    if ( is_wp_error( $response ) || wp_remote_retrieve_response_code( $response ) !== 200 ) {
+        return new WP_REST_Response(['message' => 'Test command failed.'], 500);
+    }
+    return new WP_REST_Response( ['message' => 'Test command sent.'], 200 );
+}
+
