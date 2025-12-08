@@ -311,86 +311,109 @@ func cBitToModbusAddress(cBit int) (uint16, error) {
 
 // ReadStatusFromPLCs
 func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[string]interface{}, error) {
-    log.Println("Reading real-time status from all PLCs.")
-    fullStatus := make(map[string]interface{})
+	// log.Println("Reading real-time status from all PLCs.")
+	fullStatus := make(map[string]interface{})
 
-    // FIX: Use a string key "PLC_ID-LoopIndex" to avoid collisions between PLCs
-    loopIndexToMapKey := make(map[string]string)
-    plcLoopIndices := make(map[int][]int)
+	// 1. Build Output Lookup (PLC-Index -> UI Key)
+	loopIndexToMapKey := make(map[string]string)
+	plcLoopIndices := make(map[int][]int)
 
-    for _, mapping := range configData.Mappings {
-        if len(mapping.PLCOutputs) == 0 {
-            continue
-        }
-        loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
-        if loopIndex == -1 {
-            continue
-        }
+	for _, mapping := range configData.Mappings {
+		if len(mapping.PLCOutputs) == 0 { continue }
+		loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
+		if loopIndex == -1 { continue }
 
-        yName := mapping.PLCOutputs[0]
-        uniqueKey := fmt.Sprintf("PLC%d-%s", mapping.PLCID, yName)
-        
-        // FIX: Create a composite key for internal lookup
-        // Example: "1-0" for PLC 1, Index 0
-        lookupID := fmt.Sprintf("%d-%d", mapping.PLCID, loopIndex)
-        
-        loopIndexToMapKey[lookupID] = uniqueKey
-        plcLoopIndices[mapping.PLCID] = append(plcLoopIndices[mapping.PLCID], loopIndex)
-    }
+		yName := mapping.PLCOutputs[0]
+		uniqueKey := fmt.Sprintf("PLC%d-%s", mapping.PLCID, yName)
+		
+		lookupID := fmt.Sprintf("%d-%d", mapping.PLCID, loopIndex)
+		loopIndexToMapKey[lookupID] = uniqueKey
+		plcLoopIndices[mapping.PLCID] = append(plcLoopIndices[mapping.PLCID], loopIndex)
+	}
 
-    for plcID, host := range cfg.PLCs {
-        // ... (Connection logic remains the same) ...
-        log.Printf("Polling PLC %d at %s", plcID, host)
-        handler := modbus.NewTCPClientHandler(host)
-        handler.Timeout = 5 * time.Second
-        client := modbus.NewClient(handler)
-        err := handler.Connect()
-        if err != nil {
-            log.Printf("  - ERROR connecting to PLC %d for status read: %v", plcID, err)
-            continue
-        }
-        defer handler.Close()
+	// 2. Build Schedule Lookup (PLC Slot -> DB ID)
+	// We must replicate the sorting logic from PushConfigurationToPLCs
+	// to know which DB ID landed in which Slot.
+	plcSlotToDBID := make(map[int]int)
+	
+	// Create a copy of schedules to sort without affecting original
+	// Actually, the original is already sorted by FetchConfigurationFromAPI query?
+	// The API returns "ORDER BY schedule_name ASC".
+	// The Push function iterates them in order.
+	// So Sched[0] -> Slot 1, Sched[1] -> Slot 2.
+	for i, schedule := range configData.Schedules {
+		slotID := i + 1
+		if slotID <= 12 {
+			plcSlotToDBID[slotID] = schedule.ID
+		}
+	}
 
-        // Read the C101-C124 State bits
-        // FIX: Ensure we use the Offset Address 16384 here too
-        stateBitsAddr, _ := cBitToModbusAddress(101) 
-        numStateBits := uint16(24) // 24 lights
-        resultBytes, err := client.ReadCoils(stateBitsAddr, numStateBits)
-        
-        if err != nil {
-            log.Printf("  - Error reading state bits (C101-C124) on PLC %d: %v", plcID, err)
-        } else {
-            for i := 0; i < int(numStateBits); i++ {
-                // FIX: Look up using the composite key "PLCID-LoopIndex"
-                lookupID := fmt.Sprintf("%d-%d", plcID, i)
-                
-                uiKey, ok := loopIndexToMapKey[lookupID]
-                if !ok {
-                    continue // This index isn't mapped for this specific PLC
-                }
+	for plcID, host := range cfg.PLCs {
+		// log.Printf("Polling PLC %d at %s", plcID, host)
+		handler := modbus.NewTCPClientHandler(host)
+		handler.Timeout = 5 * time.Second
+		client := modbus.NewClient(handler)
+		err := handler.Connect()
+		if err != nil {
+			log.Printf("  - ERROR connecting to PLC %d: %v", plcID, err)
+			continue
+		}
+		defer handler.Close()
 
-                byteIndex := i / 8
-                bitIndex := uint(i % 8)
-                if len(resultBytes) > byteIndex {
-                    bitValue := (resultBytes[byteIndex] >> bitIndex) & 1
-                    fullStatus[uiKey] = (bitValue == 1)
-                }
-            }
-        }
+		// Read C101-C124 (Outputs)
+		stateBitsAddr, _ := cBitToModbusAddress(101) 
+		numStateBits := uint16(24)
+		resultBytes, err := client.ReadCoils(stateBitsAddr, numStateBits)
+		
+		if err == nil {
+			for i := 0; i < int(numStateBits); i++ {
+				lookupID := fmt.Sprintf("%d-%d", plcID, i)
+				uiKey, ok := loopIndexToMapKey[lookupID]
+				if !ok { continue }
 
-        // Read Photocell (C154 on PLC 1)
-        if plcID == 1 {
-            photocellAddr, _ := cBitToModbusAddress(154)
-            result, err := client.ReadCoils(photocellAddr, 1)
-            if err != nil {
-                log.Printf("  - Error reading photocell (C154) on PLC 1: %v", err)
-            } else if len(result) > 0 {
-                fullStatus["Photocell"] = (result[0] & 1) == 1
-            }
-        }
-    }
+				byteIndex := i / 8
+				bitIndex := uint(i % 8)
+				if len(resultBytes) > byteIndex {
+					bitValue := (resultBytes[byteIndex] >> bitIndex) & 1
+					fullStatus[uiKey] = (bitValue == 1)
+				}
+			}
+		}
 
-    return fullStatus, nil
+		// Read C1-C12 (Schedules) - Lodge Only
+		if plcID == 1 {
+			schedBitsAddr, _ := cBitToModbusAddress(1)
+			numSchedBits := uint16(12)
+			schedResults, err := client.ReadCoils(schedBitsAddr, numSchedBits)
+			
+			if err == nil {
+				for i := 0; i < int(numSchedBits); i++ {
+					byteIndex := i / 8
+					bitIndex := uint(i % 8)
+					if len(schedResults) > byteIndex {
+						val := (schedResults[byteIndex] >> bitIndex) & 1
+						
+						// FIX: Map Slot ID (i+1) back to DB ID
+						slotID := i + 1
+						if dbID, ok := plcSlotToDBID[slotID]; ok {
+							fullStatus[fmt.Sprintf("Sched%d", dbID)] = (val == 1)
+						}
+					}
+				}
+			}
+		}
+
+		// Read Photocell
+		if plcID == 1 {
+			photocellAddr, _ := cBitToModbusAddress(154)
+			result, err := client.ReadCoils(photocellAddr, 1)
+			if err == nil && len(result) > 0 {
+				fullStatus["Photocell"] = (result[0] & 1) == 1
+			}
+		}
+	}
+
+	return fullStatus, nil
 }
 
 
@@ -480,7 +503,6 @@ func u16SliceToBytes(data []uint16) []byte {
 }
 
 func SetPLCTime(host string) error {
-	const startAddress = 19 // 0-based offset for SD20
 	handler := modbus.NewTCPClientHandler(host)
 	handler.Timeout = 5 * time.Second
 	client := modbus.NewClient(handler)
@@ -491,24 +513,50 @@ func SetPLCTime(host string) error {
 	defer handler.Close()
 
 	now := time.Now()
-	plcDayOfWeek := uint16(now.Weekday() + 1)
+
+	// Mapping for CLICK PLC (Contiguous Registers):
+	// SD29 (Addr 28): New Year
+	// SD30 (Addr 29): New Month
+	// SD31 (Addr 30): New Day
+	// SD32 (Addr 31): New Day of Week (Required!)
+	// SD33 (Addr 32): New Hour
+	// SD34 (Addr 33): New Minute
+	// SD35 (Addr 34): New Second
+
 	data := []uint16{
-		uint16(now.Year()),
-		uint16(now.Month()),
-		uint16(now.Day()),
-		plcDayOfWeek,
-		uint16(now.Hour()),
-		uint16(now.Minute()),
-		uint16(now.Second()),
+		uint16(now.Year()),        // SD29
+		uint16(now.Month()),       // SD30
+		uint16(now.Day()),         // SD31
+		uint16(now.Weekday() + 1), // SD32 (Day of Week: 1=Sun, 2=Mon...)
+		uint16(now.Hour()),        // SD33
+		uint16(now.Minute()),      // SD34
+		uint16(now.Second()),      // SD35
 	}
+
 	byteData := u16SliceToBytes(data)
-	_, err = client.WriteMultipleRegisters(startAddress, uint16(len(data)), byteData)
+	
+	// Write to SD29 (Address 28)
+	_, err = client.WriteMultipleRegisters(28, uint16(len(data)), byteData)
 	if err != nil {
-		return fmt.Errorf("failed to write time registers: %w", err)
+		return fmt.Errorf("failed to write new time registers: %w", err)
 	}
+
+	// Trigger Date Update (SC53 at 61492)
+	_, err = client.WriteSingleCoil(61492, 0xFF00) 
+	if err != nil {
+		return fmt.Errorf("failed to set SC53 (Date Update): %w", err)
+	}
+	
+	// Trigger Time Update (SC55 at 61494)
+	_, err = client.WriteSingleCoil(61494, 0xFF00)
+	if err != nil {
+		return fmt.Errorf("failed to set SC55 (Time Update): %w", err)
+	}
+
 	log.Printf("Successfully set time on %s to: %v", host, now.Format(time.RFC3339))
 	return nil
 }
+
 
 func setPLCBit(host string, address uint16) error {
 	handler := modbus.NewTCPClientHandler(host)

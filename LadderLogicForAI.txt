@@ -112,7 +112,7 @@ Rung 9:    [CMP DS3 == 1] [C151] -> (SET C152) // Start "Sync Active" mode
 // ---------------------------------
 // pointer to the sched ID, Current State, Previous State, and On/Off requests for
 // this pair of outputs.
-Rung 10:   [Always ON] -> (MATH DS20 = DS3 - 1 + 1000)
+Rung 10:   [Always ON] -> (MATH DS20 = DS3 + 999)
 Rung 11:   [Always ON] -> (COPY DS[DS20] -> DS10)
 Rung 12:   [Always ON] -> (MATH DS15 = DS3 + 100)
 Rung 13:   [Always ON] -> (MATH DS16 = DS3 + 200)
@@ -141,14 +141,14 @@ Rung 19:   [Always ON] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 //  "ON" Request Logic  (schedule transition ON to OFF)
                                                +-- [NOT C1003] --+
                                                |                 |
-Rung 20: [NOT C1005]--[CMP DS10 > 0]--[C1002]--+                 +--(COPY SC1 -> C[DS16])
+Rung 20: [NOT C1005]--[CMP DS10 > 0]--[C1002]--+                 +- [NOT T2]--(COPY SC1 -> C[DS16])
                                                |                 |
                                                +---- [C152] -----+
 
 //  "OFF" Request Logic  (schedule transition OFF to ON)
                                                    +-- [C1003] --+
                                                    |             |
-Rung 21: [NOT C1005]--[CMP DS10 > 0]--[NOT C1002]--+             +--(COPY SC1 -> C[DS17])
+Rung 21: [NOT C1005]--[CMP DS10 > 0]--[NOT C1002]--+             +- [NOT T2]--(COPY SC1 -> C[DS17])
                                                    |             |
                                                    +---- [C152] -+
 
@@ -165,39 +165,41 @@ Rung 24:   [Always ON] -> (COPY DS82 -> DH82)
 Rung 25:   [Always ON] -> (COPY 1h  -> DH81)
 Rung 26:   [Always ON] -> (MATH DH83 = LSH(DH81, DH82)  // ON bit mask
 Rung 27:   [Always ON] -> (MATH DH84 = LSH(DH83, 1h)    // OFF bit mask
+Rung 28:   [Always ON] -> (COPY DH83 -> DS83)
+Rung 29:   [Always ON] -> (COPY DH84 -> DS84)
 // NOTE: technically, we could use DH83 and DH84 below rather than DS83 and DS84.
 
 
 //  "ON" Action
 // Turn on the output and clear the request bits, Declare busy.
 // We now do nothing but loop until the timer is complete.
-Rung 28:   [NOT C1005] [C1009] -> (COPY DS83 -> YD[DS80]) // Pulse ON
+Rung 30:   [NOT C1005] [C1009] -> (SET C1005)            // Set Busy
                     (parallel) -> (COPY SC1 -> C[DS15])     // Set State
                     (parallel) -> (COPY C1020 -> C[DS16])   // Clear ReqON
                     (parallel) -> (COPY C1020 -> C[DS17])   // Clear ReqOFF
-                    (parallel) -> (SET C1005)            // Set Busy
+                    (parallel) -> (COPY DS83 -> YD[DS80]) // Pulse ON
 
 //  "OFF" Action
 // Turn off the output and clear the request bits.  Declare busy.
 // We now do nothing but loop[ until the timer is complete.
-Rung 29:   [NOT C1005] [NOT C1009] [C1010] -> (COPY DS84 -> YD[DS80]) // Pulse OFF
+Rung 31:   [NOT C1005] [NOT C1009] [C1010] -> (SET C1005)           // Set Busy
                                 (parallel) -> (COPY C1020 -> C[DS15])  // Set State
                                 (parallel) -> (COPY C1020 -> C[DS16])  // Clear ReqON
                                 (parallel) -> (COPY C1020 -> C[DS17])  // Clear ReqOFF
-                                (parallel) -> (SET C1005)           // Set Busy
+                                (parallel) -> (COPY DS84 -> YD[DS80]) // Pulse OFF
 
 //  100ms Pulse Timer
-Rung 30:   [C1005] -> (TMR T1 K10) 100ms
+Rung 32:   [C1005] -> (TMR T1 K2) 200ms
 
 //  Stop Pulse, Start Post-Pulse Delay
-Rung 31:   [T1] -> (COPY 0 -> YD[DS80]) // Stop Pulse
+Rung 33:   [T1] -> (COPY 0 -> YD[DS80]) // Stop Pulse
              (parallel) -> (SET C1008)
 
 //  100ms Post-Pulse Delay Timer
-Rung 32:   [C1008] -> (TMR T2 K10)  100ms
+Rung 34:   [C1008] -> (TMR T2 K2)  200ms
 
 //  Clean up Timers and Busy Flag
-Rung 33:   [T2] -> (RST C1005)
+Rung 35:   [T2] -> (RST C1005)
              (parallel) -> (RST C1008)
              // note that after clearing C1008, Timer T2 will not clear
              //      until the next empty pass.
@@ -205,7 +207,7 @@ Rung 33:   [T2] -> (RST C1005)
 // ---------------------------------
 // End of Program
 // ---------------------------------
-Rung 34: [Always ON] -> (END)
+Rung 36: [Always ON] -> (END)
 
 
 //=================================================================================

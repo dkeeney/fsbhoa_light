@@ -25,6 +25,19 @@ function fsbhoa_monitor_register_rest_routes() {
         'callback' => 'fsbhoa_lighting_send_test_mapping',
         'permission_callback' => function () { return current_user_can( 'manage_options' ); }
     ) );
+
+    // Endpoint to force a Sync
+    register_rest_route( 'fsbhoa-lighting/v1', '/sync', array(
+        'methods'  => 'POST',
+        'callback' => 'fsbhoa_lighting_manual_sync',
+        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+    ) );
+    // Endpoint to get a fresh nonce (Cookie Auth only)
+    register_rest_route( 'fsbhoa-lighting/v1', '/refresh-nonce', array(
+        'methods'  => 'POST',
+        'callback' => 'fsbhoa_lighting_refresh_nonce',
+        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+    ) );
 }
 add_action( 'rest_api_init', 'fsbhoa_monitor_register_rest_routes' );
 
@@ -148,3 +161,17 @@ function fsbhoa_lighting_send_test_mapping( WP_REST_Request $request ) {
     return new WP_REST_Response( ['message' => 'Test command sent.'], 200 );
 }
 
+/**
+ * Manually triggers the Go service sync via REST API.
+ */
+function fsbhoa_lighting_manual_sync() {
+    fsbhoa_lighting_trigger_go_service_sync();
+    return new WP_REST_Response( ['message' => 'Sync command sent.'], 200 );
+}
+
+/**
+ * Returns a fresh nonce. Relying on Cookie Authentication.
+ */
+function fsbhoa_lighting_refresh_nonce() {
+    return new WP_REST_Response( [ 'nonce' => wp_create_nonce( 'wp_rest' ) ], 200 );
+}

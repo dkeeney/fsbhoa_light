@@ -100,7 +100,7 @@ func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httpro
 
 // handleStatus needs the config to know which outputs/inputs to read.
 func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	log.Println("Received /status request. Fetching config and polling PLCs.")
+	//log.Println("Received /status request. Fetching config and polling PLCs.")
 
         var status map[string]interface{}
 	var err error
@@ -110,11 +110,11 @@ func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httproute
 		log.Println("Simulation mode: Reading from in-memory state.")
 		status, err = app.getSimulatedState()
 	} else {
-		log.Println("Live mode: Fetching config and polling PLCs.")
+		//log.Println("Live mode: Fetching config and polling PLCs.")
 		// Fetch the config *each time* status is requested.
 		configData, err := FetchConfigurationFromAPI(app.Config)
 		if err != nil {
-			log.Printf("Error fetching config for status: %v", err)
+			//log.Printf("Error fetching config for status: %v", err)
 			http.Error(w, "Failed to fetch config for status", http.StatusInternalServerError)
 			return
 		}

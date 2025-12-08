@@ -13,5 +13,5 @@ go build -o lighting-service .
 echo ""
 echo "✅ Build complete!"
 echo "You can now enable and start the service with:"
-echo "sudo systemctl enable --now fsbhoa-lighting.service"
+echo "sudo systemctl restart fsbhoa-lighting.service"
 

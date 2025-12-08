@@ -3,41 +3,61 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!app) return;
 
     // --- Config ---
-    // fsbhoa_lighting_data is localized from PHP
     const mapImageUrl = fsbhoa_lighting_data.map_image_url;
     const apiBaseUrl = fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/';
     const apiHeaders = { 'X-WP-Nonce': fsbhoa_lighting_data.nonce };
+    const apiPostHeaders = { 'Content-Type': 'application/json', 'X-WP-Nonce': fsbhoa_lighting_data.nonce };
 
-    // --- Page Elements ---
     const imageEl = document.getElementById('map-monitor-image');
     const pinOverlay = document.getElementById('map-pin-overlay');
     const statusIndicator = document.getElementById('map-status-indicator');
 
     // --- State ---
-    let allMappings = []; // Stores all mapping data (incl. pins)
+    let allMappings = [];
+    let allZones = []; // NEW: Need zones to look up schedules
     let isUpdating = false;
 
-    // --- API Calls ---
+    // --- API ---
     const api = {
         getStatus: () => fetch(apiBaseUrl + 'status', { headers: apiHeaders }),
-        getMappings: () => fetch(apiBaseUrl + 'mappings', { headers: apiHeaders })
+        getMappings: () => fetch(apiBaseUrl + 'mappings', { headers: apiHeaders }),
+        getZones: () => fetch(apiBaseUrl + 'zones', { headers: apiHeaders }), // NEW
+        test: (id, state) => fetch(apiBaseUrl + 'test-mapping', { 
+            method: 'POST', headers: apiPostHeaders, body: JSON.stringify({ mapping_id: id, state: state }) 
+        })
     };
 
-    /**
-     * Renders all pins based on the stored mapping data.
-     * This is called once on load.
-     */
+    // --- Logic ---
+
+    async function handlePinClick(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const pin = e.currentTarget;
+        const mappingId = pin.dataset.mappingId;
+        const currentState = pin.dataset.state; // 'on' or 'off'
+        
+        // Toggle state
+        const targetState = (currentState === 'on') ? 'off' : 'on';
+        
+        pin.style.opacity = '0.5'; // Visual feedback
+        try {
+            await api.test(mappingId, targetState);
+        } catch (err) {
+            alert('Failed to toggle light.');
+        } finally {
+            pin.style.opacity = '1';
+        }
+    }
+
     function renderPins() {
         let pinHTML = '';
         allMappings.forEach(mapping => {
-            // Check if coordinates exist and are a valid array
             if (Array.isArray(mapping.map_coordinates)) {
                 mapping.map_coordinates.forEach(pin => {
-                    // pin = { x, y, size }
-                    // We use the mapping ID as the key to link status
                     pinHTML += `
-                        <div class="map-pin-live map-pin-${pin.size} is-off"
+                        <div class="map-pin-live map-pin-${pin.size} status-auto-off"
                              data-mapping-id="${mapping.id}"
+                             data-state="off"
                              title="${escapeHTML(mapping.description)}"
                              style="left: ${pin.x}%; top: ${pin.y}%; transform: translate(-50%, -50%);">
                         </div>
@@ -46,88 +66,107 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
         pinOverlay.innerHTML = pinHTML;
+        
+        // Attach Listeners
+        pinOverlay.querySelectorAll('.map-pin-live').forEach(pin => {
+            pin.addEventListener('click', handlePinClick);
+        });
     }
 
-    /**
-     * Updates the color of all rendered pins based on live status.
-     * This is called every 5 seconds.
-     * @param {object} liveStatus - The status object from /status
-     */
     function updatePinStatus(liveStatus) {
-        // Create a fast lookup for mapping status
-        const statusMap = {};
-        allMappings.forEach(mapping => {
-            let mappingIsOn = false;
-            
-            // A mapping is ON if its *first* defined PLC output is ON
-            try {
-                const outputs = mapping.plc_outputs; // This is now an array
-                const plcID = mapping.plc_id;       // Get the PLC ID
-                
-                if (outputs.length > 0) {
-                    const firstOutput = outputs[0];
-                    // Construct the same unique key the Go service is sending
-                    const uniqueKey = `PLC${plcID}-${firstOutput}`; 
-                    
-                    // Check the status using the unique key
-                    if (liveStatus[uniqueKey] === true) {
-                        mappingIsOn = true;
-                    }
-                }
-            } catch (e) { /* ignore parse error */ }
-            statusMap[mapping.id] = mappingIsOn;
-        });
-
-        // Loop over all pins on the page and update their class
         const pins = pinOverlay.querySelectorAll('.map-pin-live');
+        
         pins.forEach(pin => {
             const mappingId = pin.dataset.mappingId;
-            if (statusMap[mappingId]) {
-                pin.classList.add('is-on');
-                pin.classList.remove('is-off');
-            } else {
-                pin.classList.remove('is-on');
-                pin.classList.add('is-off');
+            // Note: Mapping IDs are numbers, dataset attributes are strings.
+            const mapping = allMappings.find(m => m.id == mappingId);
+            if (!mapping) return;
+
+            // 1. Determine Hardware State (ON/OFF/PARTIAL)
+            let monitoredTotal = 0;
+            let monitoredOn = 0;
+            
+            if (mapping.plc_outputs) {
+                mapping.plc_outputs.forEach(out => {
+                    const key = `PLC${mapping.plc_id}-${out}`;
+                    if (liveStatus.hasOwnProperty(key)) {
+                        monitoredTotal++;
+                        if (liveStatus[key] === true) monitoredOn++;
+                    }
+                });
             }
+
+            // 2. Determine Logical State (Schedule)
+            // FIX: Perform Reverse Lookup to find the Zone
+            let isSchedActive = false;
+            
+            // Find the zone where mapping_ids array contains this mapping.id
+            // Ensure type matching (string vs int)
+            const ownerZone = allZones.find(z => 
+                z.mapping_ids && z.mapping_ids.some(id => id == mapping.id)
+            );
+
+            if (ownerZone) {
+                // Check if the zone's schedule is currently active
+                if (liveStatus[`Sched${ownerZone.schedule_id}`] === true) {
+                    isSchedActive = true;
+                }
+            }
+
+            // 3. Determine Color Class
+            let statusClass = '';
+            let currentState = 'off';
+
+            if (monitoredTotal > 0 && monitoredOn > 0 && monitoredOn < monitoredTotal) {
+                statusClass = 'status-partial'; // Pulsing
+                currentState = 'on'; 
+            } 
+            else if (monitoredOn > 0) {
+                currentState = 'on';
+                statusClass = isSchedActive ? 'status-auto-on' : 'status-manual-on'; // Yellow vs Orange
+            } 
+            else {
+                currentState = 'off';
+                statusClass = isSchedActive ? 'status-manual-off' : 'status-auto-off'; // Blue vs Black
+            }
+
+            // Apply Classes
+            // Reset classes first to avoid accumulation
+            pin.className = `map-pin-live map-pin-${pin.dataset.size || 'small'} ${statusClass}`;
+            
+            // Store state for toggle logic
+            pin.dataset.state = currentState;
         });
 
-        // Update photocell status
+        // Update Photocell Text
         const photocellStatus = liveStatus['Photocell'] === true
-            ? '<span style="color: #333; font-weight: bold;">DARK</span> (Lights enabled)'
-            : '<span style="color: orange; font-weight: bold;">LIGHT</span> (Lights disabled by daylight)';
-
-        statusIndicator.innerHTML = `<strong>Photocell:</strong> ${photocellStatus} (Updating every 5 seconds)`;
+            ? '<span style="color: #333; font-weight: bold;">DARK</span>'
+            : '<span style="color: orange; font-weight: bold;">LIGHT</span>';
+        statusIndicator.innerHTML = `<strong>Photocell:</strong> ${photocellStatus}`;
     }
 
-    /**
-     * Main data fetching and update loop
-     */
     async function updateStatus() {
-        if (isUpdating) return; // Prevent overlap
+        if (isUpdating) return;
         isUpdating = true;
-
         try {
-            // Fetch mappings only on the first run
+            // Fetch Config ONCE
             if (allMappings.length === 0) {
-                statusIndicator.innerHTML = '<p>Loading mappings...</p>';
-                const mappingsRes = await api.getMappings();
-                if (!mappingsRes.ok) throw new Error('Failed to load mappings.');
-                allMappings = await mappingsRes.json();
-                renderPins(); // Draw the pins for the first time
+                const [mapRes, zoneRes] = await Promise.all([api.getMappings(), api.getZones()]);
+                if (mapRes.ok && zoneRes.ok) {
+                    allMappings = await mapRes.json();
+                    allZones = await zoneRes.json();
+                    renderPins();
+                }
             }
 
-            // Fetch live status
-            statusIndicator.innerHTML = '<p>Fetching live status...</p>';
+            // Fetch Status
             const statusRes = await api.getStatus();
-            if (!statusRes.ok) throw new Error('Failed to load status.');
-            const liveStatus = await statusRes.json();
-
-            // Update pin colors
-            updatePinStatus(liveStatus);
-
+            if (statusRes.ok) {
+                const liveStatus = await statusRes.json();
+                updatePinStatus(liveStatus);
+            }
         } catch (error) {
-            console.error('Map update failed:', error);
-            statusIndicator.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            console.error(error);
         } finally {
             isUpdating = false;
         }
@@ -135,15 +174,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const escapeHTML = (str) => str ? str.toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;') : '';
 
-    // --- Start ---
+    // --- Init ---
     if (!mapImageUrl) {
-        app.innerHTML = '<h1>Error</h1><p>No map image has been set. Please set one on the <a href="/wp-admin/admin.php?page=fsbhoa-lighting-settings">FSBHOA Lighting settings page</a>.</p>';
+        app.innerHTML = '<p>No map image set.</p>';
         return;
     }
-    
     imageEl.src = mapImageUrl;
-    imageEl.alt = "HOA Map";
-
-    updateStatus(); // Initial load
-    setInterval(updateStatus, 5000); // Refresh every 5 seconds
+    
+    updateStatus();
+    setInterval(updateStatus, 2000);
 });
+

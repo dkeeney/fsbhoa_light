@@ -65,7 +65,9 @@ func main() {
 		simulatedState: make(map[string]bool), // Initialize the state map
 		// The mutex is fine with its zero-value
 	}
-        go app.startTimeSyncer()
+
+        // Since the PLC has nstp service, we no longer need to force the time.
+        //go app.startTimeSyncer()
 
 	log.Printf("Starting HTTP server on %s...", cfg.ListenPort)
 	if err := app.RunServer(); err != nil { // Use ListenPort from config

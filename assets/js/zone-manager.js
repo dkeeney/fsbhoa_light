@@ -45,6 +45,9 @@ const testApi = {
         body: JSON.stringify({ mapping_id: id, state: state }) 
     })
 };
+const statusApi = {
+    get: () => fetch(apiBaseUrl + 'status', { headers: apiHeaders })
+};
 
 // --- Global Data Store ---
 let allZones = [];
@@ -60,24 +63,32 @@ const loadAllConfigData = async () => {
     const mappingApp = document.getElementById('fsbhoa-mapping-manager-app');
 
     try {
-        console.log("Loading all config data...");
-        const [zonesRes, mappingsRes, schedulesRes] = await Promise.all([
-            zoneApi.get(), mappingApi.get(), scheduleApi.get()
+        console.log("Loading all config + live status...");
+        
+        // 1. Fetch Zones, Mappings, Schedules, AND Status
+        const [zonesRes, mappingsRes, schedulesRes, statusRes] = await Promise.all([
+            zoneApi.get(), mappingApi.get(), scheduleApi.get(), statusApi.get()
         ]);
 
-        if (!zonesRes.ok) throw new Error(`Failed loading zones: ${zonesRes.statusText}`);
-        if (!mappingsRes.ok) throw new Error(`Failed loading mappings: ${mappingsRes.statusText}`);
-        if (!schedulesRes.ok) throw new Error(`Failed loading schedules: ${schedulesRes.statusText}`);
-
+        if (!zonesRes.ok) throw new Error(`Failed loading zones`);
+        if (!mappingsRes.ok) throw new Error(`Failed loading mappings`);
+        if (!schedulesRes.ok) throw new Error(`Failed loading schedules`);
+        
+        // 2. Parse JSON
         allZones = await zonesRes.json();
         allMappings = await mappingsRes.json();
         allSchedules = await schedulesRes.json();
+        // Handle status gracefully if service is offline
+        const liveStatus = statusRes.ok ? await statusRes.json() : {};
 
+        // 3. Render
         if (zoneApp) renderZonesTable(zoneApp.querySelector('#zones-list-container'), zoneApp.querySelector('#save-zone-assignments-btn'), allZones, allSchedules);
         if (scheduleApp) renderSchedulesTable(scheduleApp.querySelector('#schedules-list-container'), allSchedules);
-        if (mappingApp) renderMappingsTable(mappingApp.querySelector('#mappings-list-container'), allMappings);
+        
+        // FIX: Pass allZones and liveStatus to the mapping renderer
+        if (mappingApp) renderMappingsTable(mappingApp.querySelector('#mappings-list-container'), allMappings, allZones, liveStatus);
 
-        console.log("All config data loaded and rendered.");
+        console.log("Data loaded.");
     } catch (error) {
         console.error('Error loading initial configuration data:', error);
         const errorMsg = '<p style="color: red;">Error loading configuration. Check console and ensure Go service is running.</p>';
@@ -252,16 +263,66 @@ document.addEventListener('DOMContentLoaded', function () {
                     schedule_name: e.target.querySelector('[name="schedule_name"]').value,
                     spans: []
                 };
-                document.querySelectorAll('.schedule-span-row').forEach(row => {
+                let validationError = null;
+
+        	document.querySelectorAll('.schedule-span-row').forEach(row => {
+                    if (validationError) return; // Stop processing if we found an error
+
                     const daysOfWeek = Array.from(row.querySelectorAll('input[name="days_of_week"]:checked')).map(cb => cb.value);
+            
+                    const onTrigger = row.querySelector('[name="on_trigger"]').value;
+                    const offTrigger = row.querySelector('[name="off_trigger"]').value;
+                    const onTimeInput = row.querySelector('[name="on_time"]').value;
+                    let offTimeInput = row.querySelector('[name="off_time"]').value;
+
+                    // --- LOGIC ENFORCEMENT ---
+            
+                    // 1. Auto-Correct "Midnight" (00:00) to "End of Day" (23:59)
+                    // This applies to ALL TIME triggers (Start or End)
+                    if (offTrigger === 'TIME' && (offTimeInput === '00:00' || offTimeInput === '')) {
+                        offTimeInput = '23:59';
+                    }
+
+                    // 2. Validation Rules
+                    if (onTrigger === 'TIME' && offTrigger === 'TIME') {
+                        // Rule: Start must be before End
+                        if (onTimeInput >= offTimeInput) {
+                            validationError = `Invalid Time: ${formatTime(onTimeInput)} to ${formatTime(offTimeInput)}.\n\nSchedules cannot cross midnight. Please split this into two spans (e.g., Evening to 23:59, then 00:00 to Morning).`;
+                            return;
+                        }
+                    } 
+                    else if (onTrigger === 'SUNDOWN' && offTrigger === 'TIME') {
+                        // Rule: If starting at Sundown, End Time must be PM (or 23:59)
+                        // If they pick an AM time (e.g. 02:00), the light won't turn on until midnight.
+                        // We use '12:00' as a safe heuristic for "Noon".
+                        if (offTimeInput < '12:00' && offTimeInput !== '23:59') {
+                             validationError = `Invalid Logic: "Sundown to ${formatTime(offTimeInput)}".\n\nBecause ${formatTime(offTimeInput)} is the next morning, this schedule crosses midnight.\n\nPlease split this into two spans:\n1. Sundown to 23:59\n2. 00:00 to ${formatTime(offTimeInput)}`;
+                             return;
+                        }
+                    }
+                    else if (onTrigger === 'TIME' && offTrigger === 'SUNRISE') {
+                        // Rule: If ending at Sunrise, Start Time must be AM (e.g. 04:00)
+                        // If they pick a PM time (e.g. 22:00), it crosses midnight.
+                        if (onTimeInput > '12:00') {
+                             validationError = `Invalid Logic: "${formatTime(onTimeInput)} to Sunrise".\n\nBecause ${formatTime(onTimeInput)} is the previous night, this schedule crosses midnight.\n\nPlease split this into two spans:\n1. ${formatTime(onTimeInput)} to 23:59\n2. 00:00 to Sunrise`;
+                             return;
+                        }
+                    }
+
                     data.spans.push({
                         days_of_week: daysOfWeek,
-                        on_trigger: row.querySelector('[name="on_trigger"]').value,
-                        on_time: row.querySelector('[name="on_time"]').value,
-                        off_trigger: row.querySelector('[name="off_trigger"]').value,
-                        off_time: row.querySelector('[name="off_time"]').value,
+                        on_trigger: onTrigger,
+                        on_time: onTimeInput,
+                        off_trigger: offTrigger,
+                        off_time: offTimeInput, // Send the potentially corrected '23:59'
                     });
                 });
+
+                if (validationError) {
+                    alert(validationError);
+                    return; // Stop the save
+                }
+
                 await scheduleApi.save(data);
                 scheduleFormContainer.style.display = 'none'; scheduleListContainer.style.display = 'block'; addScheduleBtn.style.display = 'inline-block';
                 loadAllConfigData();

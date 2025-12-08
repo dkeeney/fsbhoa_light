@@ -157,7 +157,15 @@ function renderScheduleForm(formContainer, listContainer, addNewBtn, schedule = 
                     <td><input type="text" name="schedule_name" value="${escapeHTML(schedule.schedule_name || '')}" class="regular-text" required></td>
                 </tr>
                 <tr>
-                    <th scope="row">Time Spans</th>
+                    <th scope="row" style="vertical-align: top; padding-top: 15px;">
+                        Time Spans
+                        <div style="font-weight: normal; font-style: italic; color: #666; margin-top: 8px; font-size: 0.85em; line-height: 1.4; border-left: 3px solid #ffb900; padding-left: 8px;">
+                            <strong>Note:</strong> Spans cannot cross midnight.<br>
+                            To cover overnight (e.g. 8PM to 6AM), please create two spans:<br>
+                            1. Start Time to 11:59PM<br>
+                            2. 12:00AM to End Time
+                        </div>
+                    </th>
                     <td id="schedule-spans-container">${spanRowsHTML}</td>
                 </tr>
             </table>
@@ -172,7 +180,8 @@ function renderScheduleForm(formContainer, listContainer, addNewBtn, schedule = 
     formContainer.style.display = 'block';
 };
 
-function renderMappingsTable(container, allMappings) {
+function renderMappingsTable(container, allMappings, allZones, liveStatus) {
+    // --- Sort Logic ---
     allMappings.sort((a, b) => {
         const getSortValue = (map) => {
             try {
@@ -180,51 +189,121 @@ function renderMappingsTable(container, allMappings) {
                 if (outputs && outputs.length > 0) {
                     const firstOutput = outputs[0];
                     const num = parseInt(firstOutput.substring(1), 10);
-
-                    // --- THIS IS THE FIX ---
-                    // Check if the result is NaN (e.g., from "---" used for spares)
-                    if (isNaN(num)) {
-                        return 99999; // Sort all non-number strings last
-                    }
-                    return num; // Return the valid number
+                    if (isNaN(num)) return 99999;
+                    return num;
                 }
-            } catch (e) {
-                // Catch any other errors
-            }
-            return 99999; // Default for empty/error, sort last
+            } catch (e) {}
+            return 99999;
         };
         if (a.plc_id !== b.plc_id) return a.plc_id - b.plc_id;
         return getSortValue(a) - getSortValue(b);
     });
-    const tableRows = allMappings.map(map => `
+
+    const tableRows = allMappings.map(map => {
+        // --- 1. Schedule Logic ---
+        let isSchedActive = false;
+        if (map.linked_zone_ids && map.linked_zone_ids.length > 0) {
+            const zoneId = map.linked_zone_ids[0];
+            const zone = allZones.find(z => z.id == zoneId);
+            if (zone && liveStatus[`Sched${zone.schedule_id}`] === true) {
+                isSchedActive = true;
+            }
+        }
+
+        // --- 2. Output Badges (Clean Gray Version) ---
+        let monitoredOn = 0;
+        let outputBadges = '';
+        if (Array.isArray(map.plc_outputs)) {
+            outputBadges = map.plc_outputs.map(out => {
+                const key = `PLC${map.plc_id}-${out}`;
+                if (liveStatus[key] === true) monitoredOn++;
+                
+                // Compact gray badge
+                return `<span style="display:inline-block; margin-right:3px; background:#f0f0f1; border:1px solid #ccc; padding:1px 4px; border-radius:2px; font-family:monospace; font-size:11px; color:#333;">${out}</span>`;
+            }).join(' ');
+        }
+
+        // --- 3. Bulb Color Logic ---
+        let mainClass = '';
+        let mainTooltip = '';
+
+        if (monitoredOn > 0) {
+            mainClass = isSchedActive ? 'status-auto-on' : 'status-manual-on';
+            mainTooltip = 'ON';
+        } else {
+            mainClass = isSchedActive ? 'status-manual-off' : 'status-auto-off';
+            mainTooltip = 'OFF';
+        }
+        const mainBulb = `<span class="dashicons dashicons-lightbulb monitor-bulb ${mainClass}" title="${mainTooltip}" style="margin-right:8px; font-size:18px; width:18px; height:18px;"></span>`;
+
+        return `
         <tr>
-            <td>Controller ${map.plc_id}</td>
-            <td><strong>${escapeHTML(map.description)}</strong></td>
-            <td>${Array.isArray(map.plc_outputs) ? map.plc_outputs.join(', ') : ''}</td>
-            <td>${Array.isArray(map.relays) ? map.relays.join(', ') : ''}</td>
+            <td style="white-space:nowrap;">Controller ${map.plc_id}</td>
             <td>
-                <div style="margin-bottom: 5px; display: flex; gap: 4px;">
-                    <button type="button" class="button test-btn" 
-                        data-id="${map.id}" 
-                        data-state="on" 
-                        style="color: green; border-color: green; padding: 0 6px; font-size: 10px; min-height: 22px; line-height: 20px; height: auto;">
-                        ON
-                    </button>
-                    <button type="button" class="button test-btn" 
-                        data-id="${map.id}" 
-                        data-state="off" 
-                        style="color: red; border-color: red; padding: 0 6px; font-size: 10px; min-height: 22px; line-height: 20px; height: auto;">
-                        OFF
-                    </button>
+                <div style="display:flex; align-items:center;">
+                    ${mainBulb}
+                    <strong>${escapeHTML(map.description)}</strong>
                 </div>
-                <a href="#" class="edit-mapping-link" data-mapping-id="${map.id}">Edit</a> |
-                <a href="#" class="delete-mapping-link" data-mapping-id="${map.id}" style="color: #b32d2e;">Delete</a>
+            </td>
+            <td>${outputBadges}</td>
+            <td>${Array.isArray(map.relays) ? map.relays.join(', ') : ''}</td>
+            <td style="white-space:nowrap;">
+                <div style="display: flex; align-items: center; gap: 3px;">
+                    <button type="button" class="button micro-btn" data-id="${map.id}" data-state="on" style="color: green; border-color: #46b450;">ON</button>
+                    <button type="button" class="button micro-btn" data-id="${map.id}" data-state="off" style="color: red; border-color: #dc3232;">OFF</button>
+                    
+                    <span style="color:#ddd; margin:0 3px;">|</span>
+                    
+                    <a href="#" class="edit-mapping-link" data-mapping-id="${map.id}" title="Edit">Edit</a>
+                    <span style="color:#ddd; margin:0 3px;">|</span>
+                    <a href="#" class="delete-mapping-link" data-mapping-id="${map.id}" title="Delete" style="color: #b32d2e; font-weight:bold;">&times;</a>
+                </div>
             </td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
+
+    // Inject CSS for compression and Micro Buttons directly here
     container.innerHTML = `
-        <table class="wp-list-table widefat striped">
-            <thead><tr><th>Controller</th><th>Description</th><th>PLC Outputs</th><th>Relays</th><th>Actions</th></tr></thead>
-            <tbody>${tableRows.length ? tableRows : '<tr><td colspan="5">No mappings found. Click "Add New Mapping" to get started.</td></tr>'}</tbody>
+        <style>
+            /* Compact Table Styles */
+            .fsbhoa-compact-table td, .fsbhoa-compact-table th {
+                padding: 4px 6px !important; /* Tight padding */
+                vertical-align: middle !important;
+                font-size: 12px;
+            }
+            /* Micro Button Styles */
+            .micro-btn {
+                padding: 0 5px !important;
+                font-size: 10px !important;
+                height: 22px !important;
+                line-height: 20px !important;
+                min-height: 0 !important;
+                background: #fff;
+            }
+            .micro-btn:hover { background: #f6f7f7; }
+            .micro-btn:active { transform: translateY(1px); }
+        </style>
+
+        <table class="wp-list-table widefat striped fsbhoa-compact-table">
+            <thead>
+                <tr>
+                    <th style="width:80px;">PLC</th>
+                    <th>Description</th>
+                    <th>Outputs</th>
+                    <th>Relays</th>
+                    <th style="width:130px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>${tableRows.length ? tableRows : '<tr><td colspan="5">No mappings found.</td></tr>'}</tbody>
         </table>`;
+    
+    // Re-attach listeners
+    container.querySelectorAll('.test-btn, .micro-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const event = new CustomEvent('fsbhoa-test-mapping', { detail: { id: btn.dataset.id, state: btn.dataset.state, btn: btn } });
+            document.dispatchEvent(event);
+        });
+    });
 };
