@@ -181,7 +181,19 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     imageEl.src = mapImageUrl;
     
+    // 1. Run immediately
     updateStatus();
-    setInterval(updateStatus, 2000);
+
+    // 2. Set interval for subsequent runs
+    // (Assign to variable so we can clear it if needed, though less critical here)
+    const mapInterval = setInterval(updateStatus, 2000);
+
+    // 3. Add Tab Wake-Up
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === 'visible') {
+            updateStatus(); // Fetch immediately when user looks at the screen
+        }
+    });
 });
+
 

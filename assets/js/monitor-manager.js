@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const BURST_DURATION = 10000;      // 10 seconds of Turbo
     let burstEndTime = 0;              // Timestamp when Turbo ends
     let isUpdating = false;
+    let loopTimerId = null;
 
     const api = {
         getStatus: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/status', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } }),
@@ -213,6 +214,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (isUpdating) return;
         isUpdating = true;
         
+        // Clear any existing scheduled run to prevent double-firing
+        if (loopTimerId) clearTimeout(loopTimerId);
         let nextDelay = POLL_INTERVAL_NORMAL;
 
         try {
@@ -253,7 +256,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     mappingData = await mappingsRes.json();
                 }
             }
-            renderStatus(status);
+            if (statusRes.ok) renderStatus(status);
         } catch (error) {
             console.error(error);
             // If it's a hard auth failure, show message
@@ -267,7 +270,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (typeof burstEndTime !== 'undefined' && Date.now() < burstEndTime) {
                 nextDelay = POLL_INTERVAL_BURST;
             }
-            setTimeout(runUpdateLoop, nextDelay);
+            loopTimerId = setTimeout(runUpdateLoop, nextDelay);
         }
     };
 
@@ -305,7 +308,18 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     });
 
-    // Start the loop
+    // --- 1. Start the loop
     runUpdateLoop(true);
+
+    // --- 2. WAKE UP: Run Immediately when Tab is opened/focused ---
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === 'visible') {
+            console.log("Tab active: Triggering immediate update.");
+            
+            // Cancel the waiting timer and run NOW
+            if (loopTimerId) clearTimeout(loopTimerId);
+            runUpdateLoop();
+        }
+    });
 });
 
