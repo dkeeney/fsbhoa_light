@@ -360,7 +360,7 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 		}
 		defer handler.Close()
 
-		// Read C101-C124 (Outputs)
+		// A. Read C101-C124 (Outputs)
 		stateBitsAddr, _ := cBitToModbusAddress(101) 
 		numStateBits := uint16(24)
 		resultBytes, err := client.ReadCoils(stateBitsAddr, numStateBits)
@@ -380,7 +380,31 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 			}
 		}
 
-		// Read C1-C12 (Schedules) - Lodge Only
+                // --- B. Read Schedule Mapping (DS1000 - DS1023) ---
+		// Moved OUT of the "Master Only" block. Every PLC has its own map.
+		// DS1 is Modbus 400001 (Offset 0). DS1000 is Offset 999.
+		const mapStartAddress = 999
+		const mapCount = 24
+		mapBytes, err := client.ReadHoldingRegisters(mapStartAddress, mapCount)
+		
+		if err == nil {
+			scheduleMap := make([]int, mapCount)
+			for i := 0; i < int(mapCount); i++ {
+				val := int(uint16(mapBytes[i*2])<<8 | uint16(mapBytes[i*2+1]))
+				// Convert PLC Slot ID (1-12) to WordPress Database ID
+				if dbID, ok := plcSlotToDBID[val]; ok {
+					scheduleMap[i] = dbID
+				} else {
+					scheduleMap[i] = 0
+				}
+			}
+			// Store with PLC ID suffix: "schedule_map_1", "schedule_map_2"
+			fullStatus[fmt.Sprintf("schedule_map_%d", plcID)] = scheduleMap
+		} else {
+			log.Printf("Error reading Schedule Map (DS1000) from PLC %d: %v", plcID, err)
+		}
+
+		// C. Read C1-C12 (Schedules) - Lodge Only
 		if plcID == 1 {
 			schedBitsAddr, _ := cBitToModbusAddress(1)
 			numSchedBits := uint16(12)
@@ -403,7 +427,7 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 			}
 		}
 
-		// Read Photocell
+		// Read Photocell  (C154)
 		if plcID == 1 {
 			photocellAddr, _ := cBitToModbusAddress(154)
 			result, err := client.ReadCoils(photocellAddr, 1)

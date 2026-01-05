@@ -98,6 +98,77 @@ const loadAllConfigData = async () => {
     }
 };
 
+// --- BACKGROUND POLLING: Update Bulbs on relay mapping screen Only (Safe for Editing) ---
+// --- HELPER: Single Status Update (Shared Logic) ---
+const updateBulbsOnly = async () => {
+    try {
+        const res = await statusApi.get();
+        if (!res.ok) return;
+        const liveStatus = await res.json();
+
+        allMappings.forEach(map => {
+            const btn = document.querySelector(`.micro-btn[data-id="${map.id}"]`);
+            if (!btn) return;
+
+            const row = btn.closest('tr');
+            const bulb = row.querySelector('.monitor-bulb');
+            if (!bulb) return;
+
+            // --- 1. PHYSICAL STATUS & GET Y-NUMBER ---
+            // We must do this FIRST to define 'firstY' and 'monitoredOn'
+            let monitoredOn = 0;
+            let firstY = 0; 
+            
+            if (Array.isArray(map.plc_outputs)) {
+                map.plc_outputs.forEach(out => {
+                    const key = `PLC${map.plc_id}-${out}`;
+                    if (liveStatus[key] === true) monitoredOn++;
+                    
+                    // Capture the integer Y value (e.g. "Y107" -> 107) for the schedule lookup
+                    if (firstY === 0) {
+                        try { firstY = parseInt(out.replace('Y', ''), 10); } catch(e){}
+                    }
+                });
+            }
+
+            // --- 2. SCHEDULE STATUS (The "Truth" from PLC DS1000) ---
+            let isSchedActive = false;
+            const specificMap = liveStatus[`schedule_map_${map.plc_id}`];
+
+            if (firstY > 0 && specificMap && specificMap.length > 0) {
+                // Reverse Engineer the Ladder Logic to find the Slot Index
+                const module = Math.floor(firstY / 100);     // 1
+                const bit = firstY % 100;                    // 7
+                const slotIndex = ((module - 1) * 8) + Math.floor((bit - 1) / 2);
+
+                // Look up in the SPECIFIC map
+                if (slotIndex >= 0 && slotIndex < specificMap.length) {
+                    const schedId = specificMap[slotIndex];
+                    if (schedId > 0 && liveStatus[`Sched${schedId}`] === true) {
+                        isSchedActive = true;
+                    }
+                }
+            }
+
+            // --- 3. DETERMINE COLOR ---
+            let newClass = (monitoredOn > 0) 
+                ? (isSchedActive ? 'status-auto-on' : 'status-manual-on')
+                : (isSchedActive ? 'status-manual-off' : 'status-auto-off');
+
+            bulb.classList.remove('status-auto-on', 'status-manual-on', 'status-manual-off', 'status-auto-off');
+            bulb.classList.add(newClass);
+        });
+
+    } catch (e) { console.error("Update failed", e); }
+};
+
+
+// --- BACKGROUND POLLING ---
+const startStatusLoop = () => {
+    setInterval(updateBulbsOnly, 2000); // Run every 2 seconds
+};
+
+
 // =================================================================
 // ATTACH EVENT LISTENERS (This is the only code that runs on load)
 // =================================================================
@@ -378,6 +449,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     if (res.ok) {
                         btn.textContent = 'OK';
                         console.log('Test successful:', json);
+
+                        // Wait 300ms and 650ms for the PLC to physically react, then check status immediately
+                        setTimeout(() => { updateBulbsOnly(); }, 300);
+                        setTimeout(() => { updateBulbsOnly(); }, 650);
                     } else {
                         throw new Error(json.message || 'Failed');
                     }
@@ -401,7 +476,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const formData = new FormData(e.target);
                 const data = Object.fromEntries(formData.entries());
                 
-                // --- THIS IS THE FIX ---
                 // We manually grab the raw value from the hidden input.
                 // FormData would have given us an escaped and unusable string.
                 const coordInput = document.getElementById('map_coordinates_data');
@@ -419,6 +493,48 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // --- LISTENER: Handle Micro Button Clicks ---
+    // This listens for the event sent by zone-manager-ui.js
+    document.addEventListener('fsbhoa-test-mapping', async (e) => {
+        const { id, state, btn } = e.detail;
+        
+        // 1. Visual Feedback
+        const originalText = btn.textContent;
+        btn.textContent = '...';
+        btn.style.opacity = '0.7';
+
+        try {
+            // 2. Send Command
+            const res = await testApi.send(id, state);
+            const data = await res.json();
+
+            if (res.ok) {
+                btn.textContent = 'OK';
+                // --- NEW: Trigger updates immediately ---
+                // 1. Fast Check (Good for ON)
+                setTimeout(() => { updateBulbsOnly(); }, 300);
+                // 2. Insurance Check (Catches the slower OFF)
+                setTimeout(() => { updateBulbsOnly(); }, 650); 
+            } else {
+                console.error("Test failed:", data);
+                btn.textContent = 'ERR';
+            }
+        } catch (err) {
+            console.error(err);
+            btn.textContent = 'FAIL';
+        }
+
+        // 3. Reset Button
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.opacity = '1';
+        }, 1000);
+    });
+
+
+
     // --- Trigger Initial Load ---
     loadAllConfigData();
+    startStatusLoop();
 });
+
