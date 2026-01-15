@@ -12,6 +12,7 @@ class Fsbhoa_Lighting_Admin_Settings {
     private $page_slug = 'fsbhoa-lighting-settings';
     private $config_file_path = '/var/lib/fsbhoa/lighting_service.json';
     private $default_log_path = '/home/fsbhoa/fsbhoa_light/lighting-service/lighting-service.log';
+    private $default_bluehost_url = 'https://fsbhoa.com/wp-content/plugins/fsb-lighting/api/wait_for_job.php';
 
     public function __construct() {
         add_action( 'admin_menu', array( $this, 'add_settings_page' ) );
@@ -55,13 +56,34 @@ class Fsbhoa_Lighting_Admin_Settings {
 
         // --- Sections ---
         add_settings_section('fsbhoa_lighting_section_service', 'Go Service Configuration', null, $this->page_slug);
+        add_settings_section('fsbhoa_lighting_section_remote', 'Remote Integration (Bluehost)', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_plcs', 'PLC Network Addresses', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_api', 'API Key for Go Service', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_map', 'Monitor Map Configuration', null, $this->page_slug);
-
+        add_settings_section('fsbhoa_lighting_section_access_control', 'Access Control Integration', null, $this->page_slug);
 
         // --- Fields ---
-        add_settings_field('go_service_port', 'Go Service Listen Port', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_service', ['id' => 'go_service_port', 'type' => 'number', 'default' => 8085, 'desc' => 'Port for the Go service HTTP server.']);
+        add_settings_field(
+            'go_service_port', 
+            'Go Service Listen Port', 
+            array($this, 'render_field'), 
+            $this->page_slug, 
+            'fsbhoa_lighting_section_service', 
+            ['id' => 'go_service_port', 'type' => 'number', 'default' => 8085, 'desc' => 'Port for the Go service HTTP server.']
+        );
+        add_settings_field(
+            'qr_code_actuated_duration', 
+            'QR Code Actuated Duration (Minutes)', 
+            array($this, 'render_field'), 
+            $this->page_slug, 
+            'fsbhoa_lighting_section_service', 
+            [
+                'id' => 'qr_code_actuated_duration', 
+                'type' => 'number', 
+                'default' => 90, 
+                'desc' => 'How long lights stay on after activation via QR code (in minutes).'
+            ]
+        );
         add_settings_field(
 		'log_file_path', 
 		'Go Service Log File Path', 
@@ -94,6 +116,60 @@ class Fsbhoa_Lighting_Admin_Settings {
             $this->page_slug,
             'fsbhoa_lighting_section_map',
             ['id' => 'map_image_url', 'desc' => 'Upload or select the map image from the Media Library.']
+        );
+        add_settings_field(
+            'bluehost_url', 
+            'Bluehost API URL', 
+            array($this, 'render_field'), 
+            $this->page_slug, 
+            'fsbhoa_lighting_section_remote', 
+            [
+                'id' => 'bluehost_url', 
+                'default' => $this->default_bluehost_url,
+                'desc' => 'The full URL to the remote polling API endpoint on the HOAs website.',
+            ]
+        );
+
+        add_settings_field(
+            'bluehost_api_key', 
+            'Bluehost API Key', 
+            array($this, 'render_field'), 
+            $this->page_slug, 
+            'fsbhoa_lighting_section_remote', 
+            [
+                'id' => 'bluehost_api_key', 
+                'type' => 'password', // Masked for security
+                'desc' => ' The API Key required by the Bluehost server.'
+            ]
+        );
+
+        //  The URL of the Access Control System
+        add_settings_field(
+            'access_control_url',
+            'Access Control System URL',
+            array($this, 'render_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_access_control',
+            [
+                'id' => 'access_control_url',
+                'default' => site_url(), // Default to local, but editable
+                'placeholder' => 'https://access.fsbhoa.com',
+                'desc' => 'Base URL where the Access Control plugin is running (no trailing slash).'
+            ]
+        );
+
+        //  The API Key to talk to it
+        add_settings_field(
+            'access_control_api_key',
+            'Access Control API Key',
+            array($this, 'render_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_access_control',
+            [
+                'id' => 'access_control_api_key',
+                'type' => 'password',
+                'desc' => 'The Kiosk API Key from the Access Control system.'
+            ]
         );
     }
 
@@ -160,11 +236,25 @@ class Fsbhoa_Lighting_Admin_Settings {
         $output = get_option($this->option_name, []);
         // Sanitize each field appropriately
         $output['go_service_port'] = isset( $input['go_service_port'] ) ? absint( $input['go_service_port'] ) : 8085;
+        $output['qr_code_actuated_duration'] = isset( $input['qr_code_actuated_duration'] ) ? absint( $input['qr_code_actuated_duration'] ) : 90;
+        $output['bluehost_url'] = isset( $input['bluehost_url'] ) ? esc_url_raw( $input['bluehost_url'] ) : $this->default_bluehost_url;
+        $output['bluehost_api_key'] = isset( $input['bluehost_api_key'] ) ? sanitize_text_field( $input['bluehost_api_key'] ) : '';
         $output['log_file_path'] = isset( $input['log_file_path'] ) ? sanitize_text_field( $input['log_file_path'] ) : $this->default_log_path;
         $output['plc1_address'] = isset( $input['plc1_address'] ) ? sanitize_text_field( $input['plc1_address'] ) : '';
         $output['plc2_address'] = isset( $input['plc2_address'] ) ? sanitize_text_field( $input['plc2_address'] ) : '';
         $output['go_service_api_key'] = isset( $input['go_service_api_key'] ) ? sanitize_text_field( $input['go_service_api_key'] ) : ($output['go_service_api_key'] ?? '');
         $output['map_image_url'] = isset( $input['map_image_url'] ) ? esc_url_raw( $input['map_image_url'] ) : '';
+
+        // Save Access Control URL (remove trailing slash for consistency)
+        if ( ! empty( $input['access_control_url'] ) ) {
+            $output['access_control_url'] = untrailingslashit( esc_url_raw( $input['access_control_url'] ) );
+        } else {
+            $output['access_control_url'] = site_url(); // Fallback
+        }
+
+        // Save Access Control API Key
+        $output['access_control_api_key'] = isset( $input['access_control_api_key'] ) ? sanitize_text_field( $input['access_control_api_key'] ) : '';
+
 
         return $output;
     }
@@ -176,6 +266,9 @@ class Fsbhoa_Lighting_Admin_Settings {
         $options = get_option($this->option_name, []);
         $config = [
             'ListenPort' => ':' . ($options['go_service_port'] ?? 8085), // Go expects ":port" format
+            'QRCodeActuatedDuration' => isset($options['qr_code_actuated_duration']) ? (int)$options['qr_code_actuated_duration'] : 90,
+            'BluehostURL'     => $options['bluehost_url'] ?? '',
+            'BluehostAPIKey'  => $options['bluehost_api_key'] ?? '',
             'LogFilePath' => $options['log_file_path'] ?? $this->default_log_path,
             'PLCs'       => [
                 // Store PLC addresses directly in the format Go expects (map[int]string)
