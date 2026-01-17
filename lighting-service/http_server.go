@@ -5,7 +5,7 @@ import (
         "fmt"
 	"log"
 	"net/http"
-	"strconv"
+        "strconv"
         "sync"
         "time"
 
@@ -28,6 +28,8 @@ func (app *App) isSimulationMode() bool {
 	return false
 }
 
+
+
 // RunServer starts the main HTTP server.
 func (app *App) RunServer() error {
 	router := httprouter.New()
@@ -41,13 +43,18 @@ func (app *App) RunServer() error {
 	return http.ListenAndServe(app.Config.ListenPort, router)
 }
 
+
 // handleSyncTrigger is triggered by WordPress when config changes.
 // It will fetch the *latest* config from WP and push it.
 func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+        if r.Header.Get("X-API-Key") != app.Config.WordPressAPIKey {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 	log.Println("Received /sync trigger. Fetching latest config from WordPress API and pushing to PLCs.")
 
 	// Fetch the full configuration from WordPress API
-	configData, err := FetchConfigurationFromAPI(app.Config) // NEW function call
+	configData, err := FetchConfigurationFromAPI(app.Config) 
 	if err != nil {
 		log.Printf("Error fetching config from API: %v", err)
 		http.Error(w, "Failed to fetch config from WordPress", http.StatusInternalServerError)
@@ -101,6 +108,8 @@ func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httpro
 // handleStatus needs the config to know which outputs/inputs to read.
 func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	//log.Println("Received /status request. Fetching config and polling PLCs.")
+        w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 
         var status map[string]interface{}
 	var err error
@@ -125,7 +134,6 @@ func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httproute
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 }
 

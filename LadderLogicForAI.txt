@@ -331,3 +331,84 @@ Rung 5: [Always ON] -> (NEXT)
 // Return from Subroutine
 Rung 5: [Always ON] -> (RET)
 
+
+
+
+
+================================================================================
+
+// Memory Map:
+X001   - photocell input
+C1   to C12  - Current state of a schedule
+C51  to C62  - Previous state of a schedule
+C101 to C124 - Current State of a light
+C151   - Request to sync all lights to schedule (clears overrides)
+C152   - Sync in progress
+C153   - isMasterPLC
+C154   - Photocell State
+C201 to C224 - RequestON for a light
+C251 to C274 - RequestOFF for a light
+C1000 - temp Current day of week ok
+C1001 - temp Current span active  (current time is within a span)
+C1002 - temp Current Sched State for current output
+C1003 - temp Previous Sched State for current output
+C1004
+C1005 - Busy with a pulse for current output
+C1006
+C1007
+C1008 - Busy with deadtime for a pulse
+C1009 - temp RequestON for current output
+C1010 - temp RequestOFF for current output
+C1011 - temp Start time is ok
+C1012 - temp End time is ok
+C1020 - always off
+C1022 - Debug mode (holds DS3 constant)
+
+T1       - Pulse high duration timer
+T2       - Pulse dead time duration timer
+
+DS1    - Schedule Loop iterator (1 - 168)
+DS2    - Span index 1 - 14
+DS4    - Schedule index 1 - 12
+DS3    - Loop Counter for main loop (1 to 24)
+DS4    - Loop Counter for Schedule (1 to 12)
+DS5    - Loop Connter for Latch Engine  (1 - 12)
+DS10  - Ptr to Sched State for an output (light)
+DS15  - Ptr to Current State for an output(light)
+DS16  - Ptr to RequstON for an output (light)
+DS17  - Ptr to RequstOFF for an output (light)
+DS20  - Ptr to Schedule Ptr for an output (light).  Which schedule to use for a light.
+DS21  - Ptr to Specific Schedule Span Base
+DS30  - Current Clock Time  (HHMM) as an integer
+DS43  - temp Current Segment's OnTrig
+DS42  - Current Day Of Week                                 copied from DS[DS21 + 0]
+DS43  - temp Current Segment's OnTrig                   copied from DS[DS21 + 1]
+DS44  - temp Current Segment's OffTrig                   copied from DS[DS21 + 3]
+DS45  - temp Current Segmant's OnTime (HHMM)    copied from DS[DS21 + 2]
+DS46  - temp Current Segment's OffTime(HHMM)     copied from DS[DS21  +4]
+DS47  - Ptr to Segment's On fields
+DS48  - Ptr to Segment's Off fields
+DS49  - Schedule Day of week bitmap
+DS50  - Ptr to Previious Schedule State for an output (light)
+DS51
+DS80  - temp which output module to write to (16 outputs each)
+DS82  - temp which output in the module  (even numbers are OFF outputs, odd numbers are ON)
+DS83  - temp ON bitmask (which outputs to turn ON for that output)
+DS84  - temp OFF bitmask (which outputs to turn OFF for that output)
+DS100 to DS939     - Location of Schedule configuration
+          12 schedules, 14 spans each starting at offset 100.
+           Span offsets:
+           +0  DayOfWeek - bitmask for days that span is active
+           +1  OnTrig -- turn on by PhotoCell or Time.
+           +2  OnTime -- Time span starts (HHMM)
+           +3  OffTrig  -- turn off by PhotoCell or Time
+           +4  OffTime -- Time span ends (HHMM) 24hr inclusive
+DS950 to DS961    - Mode for the output (0 = Non-timed, 1 = timed)
+DS1000 to DS1023  - Location of current Schedule State for each output (light).
+DS1050 to DS1073  - Location of previous Schedule State for each output (light)
+DH81  - temp HEX value 1 
+DH82  - temp HEX which output on the module.
+DH83  - temp HEX ON bitmask (which output to turn on)
+DH84  - temp HEX OFF bitmask (which output to turn off)
+
+

@@ -18,6 +18,7 @@ type FullConfigZone struct {
 	ID         int    `json:"id"`
 	ZoneName   string `json:"zone_name"`
 	ScheduleID int    `json:"schedule_id"`
+        IsTimed    int    `json:"is_timed"`
 }
 type FullConfigMapping struct {
 	ID            int      `json:"id"`
@@ -47,12 +48,12 @@ type FullConfigurationData struct {
 
 // FetchConfigurationFromAPI 
 func FetchConfigurationFromAPI(cfg Config) (*FullConfigurationData, error) {
-	// ... (This function is identical to your last version) ...
 	url := fmt.Sprintf("%s/wp-json/fsbhoa-lighting/v1/full-config", cfg.WordPressAPIBaseURL)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("could not create API request: %w", err)
 	}
+        req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-KEY", cfg.WordPressAPIKey)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
@@ -105,8 +106,35 @@ func generateScheduleBlock(schedule FullConfigSchedule) []uint16 {
 	return scheduleBlock
 }
 
-// ---  PushConfigurationToPLCs ---
+
+// PushConfigurationToPLCs orchestrates the full update process.
 func PushConfigurationToPLCs(cfg Config, data *FullConfigurationData) error {
+	log.Println("Starting Full PLC Configuration Update...")
+
+	// Step 1: Push Schedule Times (Start/End/Spans)
+	if err := ConfigureSchedules(cfg, data); err != nil {
+		log.Printf("Error configuring schedules: %v", err)
+		return err
+	}
+
+	// Step 2: Configure Modes (Timed vs Untimed on DS950+)
+	if err := ConfigurePLCModes(cfg, data); err != nil {
+		log.Printf("Error configuring modes: %v", err)
+		// We continue to Sync even if mode config fails partialy
+	}
+
+	// Step 3: Global Sync (Force PLC to apply new config)
+	if err := GlobalSync(cfg); err != nil {
+		log.Printf("Error during Global Sync: %v", err)
+		return err
+	}
+
+	log.Println("PLC Configuration Update Complete.")
+	return nil
+}
+
+// ---  ConfigureSchedules ---
+func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 	log.Println("Starting configuration push to all PLCs...")
 
 	// 1. --- Schedule Remapping ---
@@ -206,17 +234,77 @@ func PushConfigurationToPLCs(cfg Config, data *FullConfigurationData) error {
 			log.Printf("  - ERROR writing map block to PLC %d: %v", plcID, err)
 		}
 
-		// C. Set the Sync Request Bit (C151)
-		log.Println("  - All data written. Requesting PLC re-sync...")
-		syncRequestAddr, _ := cBitToModbusAddress(151) // C151
-		_, err = client.WriteSingleCoil(syncRequestAddr, 0xFF00)
-		if err != nil {
-			log.Printf("  - ERROR requesting re-sync (SET C151) on PLC %d: %v", plcID, err)
+	}
+	return nil
+}
+
+// ConfigurePLCModes iterates through all PLCs and all 24 outputs to set the Mode.
+// Mode 0 = Untimed (Default)
+// Mode 1 = Timed
+// Address: DS950 + (OutputIndex - 1)
+func ConfigurePLCModes(cfg Config, data *FullConfigurationData) error {
+	log.Println("Starting PLC Mode Configuration (DS950-DS973)...")
+
+	// Outer Loop: Iterate through all configured PLCs
+	for plcID, plcAddr := range cfg.PLCs {
+		handler := modbus.NewTCPClientHandler(plcAddr)
+		handler.Timeout = 2 * time.Second
+		client := modbus.NewClient(handler)
+		if err := handler.Connect(); err != nil {
+			log.Printf("Error connecting to PLC %d: %v", plcID, err)
+			continue
+		}
+		defer handler.Close()
+
+		// Inner Loop: Iterate through the 24 physical outputs
+		for i := 1; i <= 24; i++ {
+			// Calculate Register Address: DS950 for Output 1
+			regAddr := uint16(950 + (i - 1))
+
+			// Determine Mode (Lookup Light -> Zone)
+			modeVal := getModeForPLCInstance(data, plcID, i)
+
+			// Write to PLC
+                        if _, err := client.WriteSingleRegister(regAddr, modeVal); err != nil {
+				log.Printf("Error writing Mode Reg %d on PLC %d: %v", regAddr, plcID, err)
+			}
+		}
+		
+		log.Printf("   -> Configured Modes for PLC %d (%s)", plcID, plcAddr)
+	}
+	return nil
+}
+
+// Helper: Finds the mode (0=Untimed, 1=Timed) for a specific PLC Output
+func getModeForPLCInstance(data *FullConfigurationData, plcID int, outputIndex int) uint16 {
+	// outputIndex comes in as 1-24.
+	// We need to match it against calculateLoopIndex (which returns 0-23).
+	targetLoopIndex := outputIndex - 1
+
+	for _, m := range data.Mappings {
+		// 1. Check PLC ID match
+		if m.PLCID != plcID { continue }
+
+		// 2. Check Output match
+		if len(m.PLCOutputs) == 0 { continue }
+		
+		idx := calculateLoopIndex(m.PLCOutputs[0])
+		if idx == targetLoopIndex {
+			// Found the mapping! Now find the Zone.
+			if len(m.LinkedZoneIDs) > 0 {
+				zoneID := m.LinkedZoneIDs[0]
+				for _, z := range data.Zones {
+					if z.ID == zoneID {
+						if z.IsTimed == 1 {
+							return 1 // Timed
+						}
+						return 0 // Untimed
+					}
+				}
+			}
 		}
 	}
-
-	log.Println("Configuration push finished.")
-	return nil
+	return 0 // Default Untimed
 }
 
 
@@ -387,21 +475,26 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 		const mapCount = 24
 		mapBytes, err := client.ReadHoldingRegisters(mapStartAddress, mapCount)
 		
-		if err == nil {
-			scheduleMap := make([]int, mapCount)
-			for i := 0; i < int(mapCount); i++ {
-				val := int(uint16(mapBytes[i*2])<<8 | uint16(mapBytes[i*2+1]))
-				// Convert PLC Slot ID (1-12) to WordPress Database ID
-				if dbID, ok := plcSlotToDBID[val]; ok {
-					scheduleMap[i] = dbID
-				} else {
-					scheduleMap[i] = 0
-				}
-			}
-			// Store with PLC ID suffix: "schedule_map_1", "schedule_map_2"
-			fullStatus[fmt.Sprintf("schedule_map_%d", plcID)] = scheduleMap
+                if err == nil {
+    			// We asked for 24 registers (48 bytes). If we get less, it's garbage.
+    			expectedBytes := int(mapCount) * 2
+    			if len(mapBytes) < expectedBytes {
+        			log.Printf("Warning: PLC %d returned junk data (Length %d). Skipping map read.", plcID, len(mapBytes))
+    			} else {
+        			// Data is safe, proceed to parse
+        			scheduleMap := make([]int, mapCount)
+        			for i := 0; i < int(mapCount); i++ {
+            				val := int(uint16(mapBytes[i*2])<<8 | uint16(mapBytes[i*2+1]))
+            				if dbID, ok := plcSlotToDBID[val]; ok {
+                				scheduleMap[i] = dbID
+            				} else {
+                				scheduleMap[i] = 0
+            				}
+        			}
+        			fullStatus[fmt.Sprintf("schedule_map_%d", plcID)] = scheduleMap
+    			}
 		} else {
-			log.Printf("Error reading Schedule Map (DS1000) from PLC %d: %v", plcID, err)
+    			log.Printf("Error reading Schedule Map (DS1000) from PLC %d: %v", plcID, err)
 		}
 
 		// C. Read C1-C12 (Schedules) - Lodge Only
@@ -598,6 +691,42 @@ func setPLCBit(host string, address uint16) error {
 	return nil
 }
 
+
+// GlobalSync triggers the Schedule Sync (C151) on ALL configured PLCs.
+// Call this only after all configuration (Schedules and Modes) has been pushed.
+func GlobalSync(cfg Config) error {
+	log.Println("Triggering Global Sync on all PLCs...")
+	for id, plcAddr := range cfg.PLCs {
+		// Use our helper to trigger C151
+		triggerPLCSync(plcAddr)
+		log.Printf("   -> Sync requested for PLC %d (%s)", id, plcAddr)
+	}
+	return nil
+}
+
+// Helper: Sends the "Doorbell Ring" (C151) to a specific PLC to force a Sync
+func triggerPLCSync(host string) error {
+	handler := modbus.NewTCPClientHandler(host)
+	handler.Timeout = 2 * time.Second
+	client := modbus.NewClient(handler)
+	if err := handler.Connect(); err != nil {
+		log.Printf("Error connecting to PLC %s for sync: %v", host, err)
+		return err
+	}
+	defer handler.Close()
+
+	// C151 -> Address 16534
+	// Calculation: 16384 (Base) + 151 (C number) - 1 = 16534
+	addr, _ := cBitToModbusAddress(151)
+	
+	// WriteSingleCoil 0xFF00 = ON
+	_, err := client.WriteSingleCoil(addr, 0xFF00)
+	if err != nil {
+		log.Printf("Error writing Sync Bit C151 to %s: %v", host, err)
+		return err
+	}
+	return nil
+}
 
 
 // PulseMapping triggers a specific mapping (single light) for testing hardware.

@@ -288,7 +288,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         chown($config_dir, 'www-data');
         chgrp($config_dir, 'www-data');
 
-        file_put_contents($this->config_file_path, $json_data);
+        file_put_contents($this->config_file_path, $json_data . "\n");
          // Set file permissions so Go service (running as 'pi') can read it
         chmod($this->config_file_path, 0644);
     }
