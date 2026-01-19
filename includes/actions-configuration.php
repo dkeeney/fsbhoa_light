@@ -52,12 +52,13 @@ function fsbhoa_lighting_create_or_update_zone( WP_REST_Request $request ) {
     $params = $request->get_json_params();
     $zone_id = isset( $params['zone_id'] ) ? intval( $params['zone_id'] ) : 0;
     $zone_name = sanitize_text_field( $params['zone_name'] );
-    $description = sanitize_textarea_field( $params['description'] );
+    $is_timed = isset( $params['is_timed'] ) ? intval( $params['is_timed'] ) : 0;
+    $description = isset($params['description']) ? sanitize_textarea_field( $params['description'] ) : '';
     $mapping_ids = isset( $params['mapping_ids'] ) ? array_map( 'intval', $params['mapping_ids'] ) : [];
 
     if ( empty( $zone_name ) ) { return new WP_REST_Response( [ 'message' => 'Zone name is required.' ], 400 ); }
 
-    $data = ['zone_name' => $zone_name, 'description' => $description];
+    $data = ['zone_name' => $zone_name, 'description' => $description, 'is_timed' => $is_timed];
     
     $wpdb->query('START TRANSACTION');
     try {
@@ -137,7 +138,7 @@ function fsbhoa_lighting_delete_zone( WP_REST_Request $request ) {
 }
 
 /**
- * NEW: Register REST API endpoint for saving a single assignment.
+ *  Register REST API endpoint for saving a single assignment.
  */
 function fsbhoa_config_register_single_assignment_route() {
     register_rest_route( 'fsbhoa-lighting/v1', '/zone-assignment', [ // Note: 'zone-assignment' (singular)
@@ -313,7 +314,7 @@ function fsbhoa_lighting_get_full_config() {
     $zones_table = $wpdb->prefix . 'fsbhoa_lighting_zones';
     $schedule_map_table = $wpdb->prefix . 'fsbhoa_lighting_zone_schedule_map';
     $zones_raw = $wpdb->get_results( "
-        SELECT z.id, z.zone_name, COALESCE(sm.schedule_id, 0) as schedule_id
+        SELECT z.id, z.zone_name, z.is_timed, COALESCE(sm.schedule_id, 0) as schedule_id
         FROM $zones_table z
         LEFT JOIN $schedule_map_table sm ON z.id = sm.zone_id
         ORDER BY z.zone_name ASC
@@ -323,9 +324,10 @@ function fsbhoa_lighting_get_full_config() {
     if (is_array($zones_raw)) {
         foreach ($zones_raw as $row) {
             $config_data['zones'][] = [
-                'id' => (int)$row['id'], // <-- FIX: Cast to int
+                'id' => (int)$row['id'], 
                 'zone_name' => $row['zone_name'],
-                'schedule_id' => (int)$row['schedule_id'] // <-- FIX: Cast to int
+                'is_timed' => (int)$row['is_timed'],
+                'schedule_id' => (int)$row['schedule_id'] 
             ];
         }
     }
@@ -345,8 +347,8 @@ function fsbhoa_lighting_get_full_config() {
     if(is_array($mappings_raw)){
         foreach($mappings_raw as $map){
             $config_data['mappings'][] = [
-                'id' => (int)$map['id'], // <-- FIX: Cast to int
-                'plc_id' => (int)$map['plc_id'], // <-- FIX: Cast to int
+                'id' => (int)$map['id'], 
+                'plc_id' => (int)$map['plc_id'],
                 'plc_outputs' => json_decode($map['plc_outputs']),
                 'relays' => json_decode($map['relays']),
                 'linked_zone_ids' => $links_by_output[(int)$map['id']] ?? []
@@ -364,9 +366,9 @@ function fsbhoa_lighting_get_full_config() {
 
     $spans_by_schedule = [];
     foreach($spans_raw as $span){
-        $spans_by_schedule[(int)$span['schedule_id']][] = [ // <-- FIX: Cast to int
-            'id' => (int)$span['id'], // <-- FIX: Cast to int
-            'schedule_id' => (int)$span['schedule_id'], // <-- FIX: Cast to int
+        $spans_by_schedule[(int)$span['schedule_id']][] = [
+            'id' => (int)$span['id'], 
+            'schedule_id' => (int)$span['schedule_id'], 
             'days_of_week' => json_decode($span['days_of_week']),
             'on_trigger' => $span['on_trigger'],
             'on_time' => $span['on_time'], // Keep as string/null
@@ -378,7 +380,7 @@ function fsbhoa_lighting_get_full_config() {
     if(is_array($schedules_raw)){
          foreach($schedules_raw as $sched){
             $config_data['schedules'][] = [
-                'id' => (int)$sched['id'], // <-- FIX: Cast to int
+                'id' => (int)$sched['id'], 
                 'schedule_name' => $sched['schedule_name'],
                 'spans' => $spans_by_schedule[(int)$sched['id']] ?? []
             ];

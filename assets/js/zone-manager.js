@@ -220,21 +220,61 @@ document.addEventListener('DOMContentLoaded', function () {
             addNewBtn.addEventListener('click', (e) => { e.preventDefault(); renderZoneForm(formContainer, listContainer, addNewBtn, saveAssignmentsBtn, allMappings); });
         }
 
+        // Combined Listener for all Zone Actions (Edit, Delete, QR, Cancel)
         zoneApp.addEventListener('click', async (e) => {
-            if (e.target.matches('.edit-zone-link, .delete-zone-link, #cancel-edit-btn, #save-zone-assignments-btn')) e.preventDefault();
+            const editBtn = e.target.closest('.edit-zone-link');
+            const deleteBtn = e.target.closest('.delete-zone-link');
+            const qrBtn     = e.target.closest('.generate-qr-link');
+            const isCancel  = e.target.matches('#cancel-edit-btn');
 
-            if (e.target.matches('.edit-zone-link')) {
-                const zoneId = e.target.dataset.zoneId;
+            if (editBtn || deleteBtn || qrBtn || isCancel || e.target.matches('#save-zone-assignments-btn')) {
+                e.preventDefault();
+            }
+
+            if (editBtn) {
+                const zoneId = editBtn.dataset.zoneId;
                 const zoneToEdit = allZones.find(z => z.id == zoneId);
                 renderZoneForm(formContainer, listContainer, addNewBtn, saveAssignmentsBtn, allMappings, zoneToEdit);
-            } else if (e.target.matches('.delete-zone-link')) {
-                const zoneId = e.target.dataset.zoneId;
+            } 
+            else if (deleteBtn) {
+                const zoneId = deleteBtn.dataset.zoneId;
                 if (confirm('Are you sure you want to delete this zone?')) {
                     await zoneApi.delete(zoneId);
                     loadAllConfigData();
                 }
-            } else if (e.target.matches('#cancel-edit-btn')) {
-                formContainer.style.display = 'none'; listContainer.style.display = 'block'; addNewBtn.style.display = 'inline-block'; saveAssignmentsBtn.style.display = 'inline-block';
+            } 
+            else if (qrBtn) {
+                const zoneId = qrBtn.dataset.zoneId;
+                const zone = allZones.find(z => z.id == zoneId);
+                const triggerUrl = `https://fsbhoa.com/lights/?court=${encodeURIComponent(zone.zone_name)}`;
+                const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(triggerUrl)}`;
+
+                const printWin = window.open('', '_blank');
+                printWin.document.write(`
+                    <html>
+                    <body style="text-align:center; padding:50px; font-family:sans-serif;">
+                        <div id="loading">Generating QR Code...</div>
+                        <h1>${escapeHTML(zone.zone_name)}</h1>
+                        <img id="qr-code-img" src="${qrImageUrl}" style="width:300px; height:300px; margin:20px 0; display:none;" />
+                        <p style="font-size:18px;">Scan to activate lights for 90 minutes.</p>
+                        <script>
+                            const img = document.getElementById('qr-code-img');
+                            img.onload = function() {
+                                document.getElementById('loading').style.display = 'none';
+                                img.style.display = 'inline-block';
+                                window.print();
+                            };
+                        </script>
+                    </body>
+                    </html>
+                `);
+                printWin.document.close();
+                printWin.focus();
+            } 
+            else if (isCancel) {
+                formContainer.style.display = 'none';
+                listContainer.style.display = 'block';
+                addNewBtn.style.display = 'inline-block';
             }
         });
 
@@ -243,6 +283,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 const data = Object.fromEntries(formData.entries());
+                data.is_timed = e.target.querySelector('#is_timed').checked ? 1 : 0;
                 data.mapping_ids = formData.getAll('mapping_ids[]');
                 await zoneApi.save(data);
                 formContainer.style.display = 'none'; listContainer.style.display = 'block'; addNewBtn.style.display = 'inline-block';
@@ -285,7 +326,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         
-        
     }
 
     // --- Schedule Manager ---
@@ -306,23 +346,20 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         scheduleApp.addEventListener('click', async e => {
-            if (e.target.matches('.edit-schedule-link, .delete-schedule-link, .remove-span-btn, #add-span-btn, #cancel-btn')) e.preventDefault();
+            const isSchedEdit = e.target.matches('.edit-schedule-link');
+            const isSchedDelete = e.target.matches('.delete-schedule-link');
+
+            if (isSchedEdit || isSchedDelete || e.target.matches('.remove-span-btn, #add-span-btn, #cancel-btn')) e.preventDefault();
 
             if (e.target.matches('#cancel-btn')) {
                 scheduleFormContainer.style.display = 'none'; scheduleListContainer.style.display = 'block'; addScheduleBtn.style.display = 'inline-block';
-            } else if (e.target.matches('.edit-schedule-link')) {
+            } else if (isSchedEdit) {
                 const id = e.target.dataset.scheduleId;
                 const scheduleToEdit = allSchedules.find(s => s.id == id);
                 renderScheduleForm(scheduleFormContainer, scheduleListContainer, addScheduleBtn, scheduleToEdit);
-            } else if (e.target.matches('.delete-schedule-link')) {
+            } else if (isSchedDelete) {
                 const id = e.target.dataset.scheduleId;
                 if (confirm('Are you sure?')) { await scheduleApi.delete(id); loadAllConfigData(); }
-            } else if (e.target.matches('#add-span-btn')) {
-                document.getElementById('schedule-spans-container').insertAdjacentHTML('beforeend', renderSpanRow());
-            } else if (e.target.matches('.remove-span-btn')) {
-                if (scheduleApp.querySelectorAll('.schedule-span-row').length > 1) {
-                    e.target.closest('.schedule-span-row').remove();
-                } else { alert('A schedule must have at least one time span.'); }
             }
         });
 
@@ -417,20 +454,23 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         mappingApp.addEventListener('click', async e => {
-            if(e.target.matches('.edit-mapping-link, .delete-mapping-link, #cancel-mapping-edit-btn')) e.preventDefault();
+            const isMapEdit = e.target.matches('.edit-mapping-link');
+            const isMapDelete = e.target.matches('.delete-mapping-link');
+            const isCancel = e.target.matches('#cancel-mapping-edit-btn');
 
-            if (e.target.matches('.edit-mapping-link')) {
+            if (isMapEdit || isMapDelete || isCancel) e.preventDefault();
+
+            if (isMapEdit) {
                 const mappingId = e.target.dataset.mappingId;
                 const mapToEdit = allMappings.find(m => m.id == mappingId);
-
-                // Pass the required container arguments to the render function
                 renderMappingForm(mappingFormContainer, mappingListContainer, addNewMappingBtn, mapToEdit);
-
-            } else if (e.target.matches('.delete-mapping-link')) {
+            } else if (isMapDelete) {
                 const mappingId = e.target.dataset.mappingId;
                 if (confirm('Are you sure?')) { await mappingApi.delete(mappingId); loadAllConfigData(); }
-            } else if (e.target.matches('#cancel-mapping-edit-btn')) {
-                mappingFormContainer.style.display = 'none'; mappingListContainer.style.display = 'block'; addNewMappingBtn.style.display = 'inline-block';
+            } else if (isCancel) {
+                mappingFormContainer.style.display = 'none';
+                mappingListContainer.style.display = 'block';
+                addNewMappingBtn.style.display = 'inline-block';
             } else if (e.target.matches('.test-btn')) {
                 e.preventDefault();
                 const btn = e.target;
@@ -529,8 +569,8 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.textContent = originalText;
             btn.style.opacity = '1';
         }, 1000);
-    });
 
+    });
 
 
     // --- Trigger Initial Load ---

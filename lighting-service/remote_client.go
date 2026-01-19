@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+        "net/url"
 )
 
 // PollResponse matches the JSON returned by the Bluehost PHP script
@@ -110,11 +111,11 @@ func performLongPoll(client *http.Client, cfg Config) (*PollResponse, error) {
 
 // Helper: Asks Local WordPress if this email swiped the gate recently
 func verifyLocalSwipe(cfg Config, email string) bool {
-	url := fmt.Sprintf("%s/wp-json/fsbhoa-lighting/v1/verify-swipe?email=%s", cfg.WordPressAPIBaseURL, email)
+        url := fmt.Sprintf("%s/wp-json/fsbhoa/v1/access/verify-email?email=%s", cfg.AccessControlURL, url.QueryEscape(email))
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("X-API-KEY", cfg.WordPressAPIKey)
+	req.Header.Set("X-API-KEY", cfg.AccessControlAPIKey)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := client.Do(req)

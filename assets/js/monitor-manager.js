@@ -110,8 +110,14 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
 
-            // Render the Bulb Icon
-            const statusText = `<span class="dashicons dashicons-lightbulb monitor-bulb ${statusClass}" title="${tooltip}"></span>`;
+            // Render the Bulb Icon & Timer
+            const remaining = status[`Timer${zone.id}`] || 0;
+            const timerHtml = remaining > 0 ? `<div style="font-size:10px; color:#2271b1; font-weight:bold;">${Math.ceil(remaining/60)}m left</div>` : '';
+            const statusText = `
+                <div style="text-align:center;">
+                    <span class="dashicons dashicons-lightbulb monitor-bulb ${statusClass}" title="${tooltip}"></span>
+                    ${timerHtml}
+                </div>`;
 
             // --- Override Links (Same as before) ---
             // We disable the link matching the current state

@@ -6,14 +6,51 @@
     .wp-list-table { margin-top: 20px; }
     .form-table { margin-top: 10px; }
 
-    /* Reduce padding on all table cells */
+    /* Formatting for the 5-column layout */
     .wp-list-table th,
     .wp-list-table td {
-        padding-top: 4px;
-        padding-bottom: 4px;
+        padding: 6px 8px !important;
         line-height: 1.3;
         vertical-align: middle;
     }
+
+    /* Make icons transparent to clicks so the parent link always gets the event */
+    .wp-list-table .dashicons {
+        pointer-events: none;
+    }
+    
+    /* Column 3: Type (Clock Icon) */
+    .wp-list-table th:nth-child(3), 
+    .wp-list-table td:nth-child(3) { 
+        width: 45px !important; 
+        text-align: center !important; 
+    }
+
+    /* All Actions (Last Child) */
+    .wp-list-table th:last-child, 
+    .wp-list-table td:last-child { 
+        width: 100px !important; 
+        text-align: right !important; 
+        white-space: nowrap !important;
+    }
+    /* Standardize spacing for all management tables */
+    .wp-list-table td {
+        vertical-align: middle !important;
+    }
+    
+    /* Ensure action icons align vertically with the text */
+    .wp-list-table td:last-child .dashicons {
+        vertical-align: middle;
+        font-size: 18px;
+        width: 18px;
+        height: 18px;
+    }
+
+    /* Add a little hover effect for the icons */
+    .wp-list-table td:last-child a:hover {
+        opacity: 0.7;
+    }
+
 
     /* Make the schedule dropdown smaller */
     #fsbhoa-zone-manager-app .wp-list-table td select {

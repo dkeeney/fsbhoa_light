@@ -47,7 +47,7 @@ func (app *App) RunServer() error {
 // handleSyncTrigger is triggered by WordPress when config changes.
 // It will fetch the *latest* config from WP and push it.
 func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-        if r.Header.Get("X-API-Key") != app.Config.WordPressAPIKey {
+        if r.Header.Get("X-API-Key") != app.Config.LightingAPIKey {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}

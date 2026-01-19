@@ -22,11 +22,21 @@ $headers = getallheaders();
 // OR hardcode the key here for simplicity.
 $valid_key = defined('FSBHOA_LIGHTING_API_KEY') ? FSBHOA_LIGHTING_API_KEY : '733KjVR4jkBGnoBEDLbC1rvCqxF7gMdz6ygbxRjCM+Y=';
 
-$provided_key = isset($headers['X-API-Key']) ? $headers['X-API-Key'] : '';
+// HEADER CHECK: Look in $_SERVER first (Standard), then fallback to headers
+$provided_key = '';
+if (isset($_SERVER['HTTP_X_API_KEY'])) {
+    $provided_key = $_SERVER['HTTP_X_API_KEY'];
+} elseif (function_exists('getallheaders')) {
+    $headers = getallheaders();
+    if (isset($headers['X-API-Key'])) {
+        $provided_key = $headers['X-API-Key'];
+    }
+}
 
 if ( $provided_key !== $valid_key ) {
     http_response_code(403);
-    die(json_encode(["error" => "Unauthorized. Invalid API Key."]));
+    // Debugging hint (visible if you curl manually)
+    die(json_encode(["error" => "Unauthorized", "received" => $provided_key]));
 }
 
 // 3. Setup Headers & Time Limits

@@ -51,7 +51,8 @@ function fsbhoa_lighting_get_status_from_service() {
     // Get the port, or use 8085 as a default if not set
     $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
     $service_url = sprintf('http://localhost:%d/status', $port);
-    $response = wp_remote_get( $service_url, array('timeout' => 10) );
+    $response = wp_remote_get( $service_url, array('timeout' => 3) );
+
 
     if ( is_wp_error( $response ) ) {
         return new WP_REST_Response(

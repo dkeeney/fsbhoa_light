@@ -53,7 +53,12 @@ function fsbhoa_lighting_activate() {
 
     // 1. Zones Table
     $table_name_zones = $wpdb->prefix . 'fsbhoa_lighting_zones';
-    $sql_zones = "CREATE TABLE $table_name_zones ( id mediumint(9) NOT NULL AUTO_INCREMENT, zone_name varchar(100) NOT NULL, description text, PRIMARY KEY  (id) ) $charset_collate;";
+    $sql_zones = "CREATE TABLE $table_name_zones ( 
+        id mediumint(9) NOT NULL AUTO_INCREMENT, 
+        zone_name varchar(100) NOT NULL, 
+        description text, 
+        is_timed tinyint(1) DEFAULT 0,
+        PRIMARY KEY  (id) ) $charset_collate;";
     dbDelta( $sql_zones );
 
     // 2. PLC Outputs Table (Hardware Map)
@@ -115,14 +120,14 @@ function fsbhoa_lighting_enqueue_scripts() {
         wp_enqueue_script( 
             'fsbhoa-zone-manager-ui', 
             plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager-ui.js', 
-            array(), '1.2.0', true 
+            array(), '1.2.2', true 
         );
         
         // 2. Register the new Map file
         wp_enqueue_script( 
             'fsbhoa-zone-manager-map', 
             plugin_dir_url( __FILE__ ) . 'assets/js/zone-manager-map.js', 
-            array(), '1.2.0', true 
+            array(), '1.2.2', true 
         );
 
         // 3. Register the main file and tell it to load AFTER the other two

@@ -7,6 +7,8 @@ function renderZonesTable(container, saveBtn, allZones, allSchedules) {
             <tr>
                 <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
                 <td>${escapeHTML(zone.description)}</td>
+                <td style="text-align: center;">${zone.is_timed == 1 ? 
+                    '<span class="dashicons dashicons-clock" title="Timed Zone" style="color:#2271b1;"></span>' : ''}</td>
                 <td>
                     <select class="zone-schedule-select" data-zone-id="${zone.id}" style="width: 100%;">
                         <option value="0">-- None --</option>
@@ -14,15 +16,24 @@ function renderZonesTable(container, saveBtn, allZones, allSchedules) {
                     </select>
                 </td>
                 <td>
-                    <a href="#" class="edit-zone-link" data-zone-id="${zone.id}">Edit Details</a> |
-                    <a href="#" class="delete-zone-link" data-zone-id="${zone.id}" style="color: #b32d2e;">Delete</a>
+                    ${zone.is_timed == 1 ? `<a href="#" class="generate-qr-link" data-zone-id="${zone.id}" title="Generate QR Code"><span class="dashicons dashicons-share"></span></a> | ` : ''}
+                    <a href="#" class="edit-zone-link" data-zone-id="${zone.id}" title="Edit Zone" style="text-decoration: none;"><span class="dashicons dashicons-edit"></span></a> |
+                    <a href="#" class="delete-zone-link" data-zone-id="${zone.id}" title="Delete Zone" style="color: #b32d2e; text-decoration: none;"><span class="dashicons dashicons-trash"></span></a>
                 </td>
             </tr>`;
     }).join('');
     container.innerHTML = `
         <table class="wp-list-table widefat striped fixed">
-            <thead><tr><th style="width: 25%;">Zone Name</th><th>Description</th><th style="width: 25%;">Assigned Schedule</th><th style="width: 15%;">Actions</th></tr></thead>
-            <tbody>${tableRows.length ? tableRows : '<tr><td colspan="4">No zones found. Click "Add New Zone" to get started.</td></tr>'}</tbody>
+            <thead>
+                <tr>
+                    <th style="width: 20%;">Zone Name</th>
+                    <th>Description</th>
+                    <th style="width: 50px; text-align: center;">Type</th>
+                    <th style="width: 25%;">Assigned Schedule</th>
+                    <th style="width: 150px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>${tableRows.length ? tableRows : '<tr><td colspan="5">No zones found. Click "Add New Zone" to get started.</td></tr>'}</tbody>
         </table>`;
     saveBtn.style.display = 'none'; // Hide the old save button
 };
@@ -72,6 +83,13 @@ async function renderZoneForm(formContainer, listContainer, addNewBtn, saveBtn, 
                     <td><input name="description" type="text" id="description" value="${escapeHTML(zone.description || '')}" class="large-text"></td>
                 </tr>
                 <tr class="form-field">
+                    <th scope="row"><label for="is_timed">Timed Zone</label></th>
+                    <td>
+                        <input name="is_timed" type="checkbox" id="is_timed" value="1" ${zone.is_timed == 1 ? 'checked' : ''}>
+                        <p class="description">Enable QR code activation and PLC-based 90-minute timer for this zone.</p>
+                    </td>
+                </tr>
+                <tr class="form-field">
                     <th scope="row" style="vertical-align: top; padding-top: 12px;">Assign PLC Output Mappings</th>
                     <td style="padding-top: 10px;">${mappingsChecklistHTML || 'No mappings defined yet. Please add mappings below first.'}</td>
                 </tr>
@@ -98,14 +116,20 @@ function renderSchedulesTable(container, allSchedules) {
                 <td><strong>${escapeHTML(s.schedule_name)}</strong></td>
                 <td>${spansSummary}</td>
                 <td>
-                    <a href="#" class="edit-schedule-link" data-schedule-id="${s.id}">Edit</a> |
-                    <a href="#" class="delete-schedule-link" data-schedule-id="${s.id}" style="color: #b32d2e;">Delete</a>
+                    <a href="#" class="edit-schedule-link" data-schedule-id="${s.id}" title="Edit Schedule" style="text-decoration: none;"><span class="dashicons dashicons-edit"></span></a> |
+                    <a href="#" class="delete-schedule-link" data-schedule-id="${s.id}" title="Delete Schedule" style="color: #b32d2e; text-decoration: none;"><span class="dashicons dashicons-trash"></span></a>
                 </td>
             </tr>`;
     }).join('');
     container.innerHTML = `
         <table class="wp-list-table widefat striped" style="margin-top:20px;">
-            <thead><tr><th>Schedule Name</th><th>Time Spans</th><th>Actions</th></tr></thead>
+            <thead>
+                <tr>
+                    <th style="width: 20%;">Schedule Name</th>
+                    <th>Time Spans</th>
+                    <th style="width: 100px; text-align: right;">Actions</th>
+                </tr>
+            </thead>
             <tbody>${rows.length ? rows : '<tr><td colspan="3">No schedules found. Click "Add New Schedule" to get started.</td></tr>'}</tbody>
         </table>
     `;
@@ -254,9 +278,9 @@ function renderMappingsTable(container, allMappings, allZones, liveStatus) {
                     
                     <span style="color:#ddd; margin:0 3px;">|</span>
                     
-                    <a href="#" class="edit-mapping-link" data-mapping-id="${map.id}" title="Edit">Edit</a>
+                    <a href="#" class="edit-mapping-link" data-mapping-id="${map.id}" title="Edit Mapping" style="text-decoration: none;"><span class="dashicons dashicons-edit"></span></a>
                     <span style="color:#ddd; margin:0 3px;">|</span>
-                    <a href="#" class="delete-mapping-link" data-mapping-id="${map.id}" title="Delete" style="color: #b32d2e; font-weight:bold;">&times;</a>
+                    <a href="#" class="delete-mapping-link" data-mapping-id="${map.id}" title="Delete Mapping" style="color: #b32d2e; text-decoration: none;"><span class="dashicons dashicons-trash"></span></a>
                 </div>
             </td>
         </tr>

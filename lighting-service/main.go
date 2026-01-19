@@ -12,11 +12,13 @@ type Config struct {
 	ListenPort             string         `json:"ListenPort"`
 	LogFilePath            string         `json:"LogFilePath"`
 	PLCs                   map[int]string `json:"PLCs"`
-	WordPressAPIKey        string         `json:"WordPressAPIKey"`
-	WordPressAPIBaseURL    string         `json:"WordPressAPIBaseURL"`
-	QRCodeActuatedDuration int            `json:"QRCodeActuatedDuration"`
+	LightingAPIKey         string         `json:"LightingAPIKey"`
+	LightingAPIBaseURL     string         `json:"LightingAPIBaseURL"`
 	BluehostURL            string         `json:"BluehostURL"`
 	BluehostAPIKey         string         `json:"BluehostAPIKey"`
+        AccessControlAPIKey    string         `json:"AccessControlAPIKey"`
+        AccessControlURL       string         `json:"AccessControlURL"`
+	QRCodeActuatedDuration int            `json:"QRCodeActuatedDuration"`
 }
 
 // Global config variable

@@ -58,7 +58,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         add_settings_section('fsbhoa_lighting_section_service', 'Go Service Configuration', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_remote', 'Remote Integration (Bluehost)', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_plcs', 'PLC Network Addresses', null, $this->page_slug);
-        add_settings_section('fsbhoa_lighting_section_api', 'API Key for Go Service', null, $this->page_slug);
+        add_settings_section('fsbhoa_lighting_section_api', 'API Key for Lighting', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_map', 'Monitor Map Configuration', null, $this->page_slug);
         add_settings_section('fsbhoa_lighting_section_access_control', 'Access Control Integration', null, $this->page_slug);
 
@@ -102,7 +102,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         add_settings_field('plc2_address', 'PLC #2 Address (Pool)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc2_address', 'placeholder' => 'e.g., 192.168.1.202:502']);
         add_settings_field(
             'go_service_api_key',
-            'Go Service API Key',
+            'Ligting API Key',
             array($this, 'render_api_key_field'),
             $this->page_slug,
             'fsbhoa_lighting_section_api',
@@ -275,8 +275,10 @@ class Fsbhoa_Lighting_Admin_Settings {
                 1 => $options['plc1_address'] ?? '',
                 2 => $options['plc2_address'] ?? '',
             ],
-            'WordPressAPIKey' => $options['go_service_api_key'] ?? '',
-            'WordPressAPIBaseURL' => site_url(),
+            'LightingAPIKey' => $options['go_service_api_key'] ?? '',
+            'LightingAPIBaseURL' => site_url(),
+            'AccessControlAPIKey' => $options['access_control_api_key'] ?? '',
+            'AccessControlURL' => $options['access_control_url'] ?? '',
         ];
 
         $json_data = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);

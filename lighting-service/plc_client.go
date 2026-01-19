@@ -48,13 +48,13 @@ type FullConfigurationData struct {
 
 // FetchConfigurationFromAPI 
 func FetchConfigurationFromAPI(cfg Config) (*FullConfigurationData, error) {
-	url := fmt.Sprintf("%s/wp-json/fsbhoa-lighting/v1/full-config", cfg.WordPressAPIBaseURL)
+	url := fmt.Sprintf("%s/wp-json/fsbhoa-lighting/v1/full-config", cfg.LightingAPIBaseURL)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("could not create API request: %w", err)
 	}
         req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-API-KEY", cfg.WordPressAPIKey)
+	req.Header.Set("X-API-KEY", cfg.LightingAPIKey)
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
