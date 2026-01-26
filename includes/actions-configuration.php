@@ -38,6 +38,13 @@ function fsbhoa_config_register_rest_routes() {
         'callback' => 'fsbhoa_lighting_get_full_config', // Re-uses the EXACT same logic
         'permission_callback' => function () { return current_user_can( 'manage_options' ); }
     ] );
+
+    // Set Timer button action
+    register_rest_route( 'fsbhoa-lighting/v1', '/trigger-timer', [
+        'methods' => 'POST',
+        'callback' => 'fsbhoa_lighting_trigger_timer',
+        'permission_callback' => function () { return current_user_can( 'manage_options' ); }
+    ] );
 }
 add_action( 'rest_api_init', 'fsbhoa_config_register_rest_routes' );
 
@@ -393,3 +400,31 @@ function fsbhoa_lighting_get_full_config() {
     
     return new WP_REST_Response($config_data, 200);
 }
+
+
+/**
+ * Triggers the 90-minute timer for a specific zone via the Go service.
+ */
+function fsbhoa_lighting_trigger_timer( WP_REST_Request $request ) {
+    $params = $request->get_json_params();
+    $zone_id = isset($params['zone_id']) ? intval($params['zone_id']) : 0;
+
+    if ($zone_id <= 0) {
+        return new WP_REST_Response(['message' => 'Invalid Zone ID.'], 400);
+    }
+
+    $options = get_option('fsbhoa_lighting_settings');
+    $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
+    
+    // We send this to a new endpoint in the Go service
+    $service_url = sprintf('http://localhost:%d/trigger/zone/%d', $port, $zone_id);
+
+    $response = wp_remote_post($service_url, array('timeout' => 5));
+
+    if (is_wp_error($response)) {
+        return new WP_REST_Response(['message' => 'Go service unreachable.'], 503);
+    }
+
+    return new WP_REST_Response(['message' => 'Timer trigger sent to Go service.'], 200);
+}
+

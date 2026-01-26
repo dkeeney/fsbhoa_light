@@ -1,0 +1,21 @@
+{
+  "name": "Lodge_Simulator",
+  "port": 5020,
+  "slave_id": 1,
+  "ladder_file": "../LadderLogicForAI.txt",
+  "scan_rate_ms": 50,
+  "slow_mo_sec": 1.0,
+  "initial_state": {
+    "X001": false,
+    "C153": true,
+    "C154_stub": false
+  },
+  "retentive": {
+    "DS": [100, 1200]
+  },
+  "logging": {
+    "level": "INFO",
+    "log_output_changes": true,
+    "log_file": "lodge.log"
+  }
+}

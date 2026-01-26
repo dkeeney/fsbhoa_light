@@ -21,9 +21,18 @@
     
     /* Column 3: Type (Clock Icon) */
     .wp-list-table th:nth-child(3), 
-    .wp-list-table td:nth-child(3) { 
-        width: 45px !important; 
-        text-align: center !important; 
+    .wp-list-table td:nth-child(3) {
+        text-align: center !important;
+        vertical-align: middle !important;
+    }
+
+    .trigger-timer-link:hover {
+        opacity: 0.7;
+    }
+
+    .zone-timer-countdown {
+        line-height: 1;
+        vertical-align: middle;
     }
 
     /* All Actions (Last Child) */

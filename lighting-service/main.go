@@ -21,6 +21,7 @@ type Config struct {
 	QRCodeActuatedDuration int            `json:"QRCodeActuatedDuration"`
 }
 
+
 // Global config variable
 var globalConfig Config
 
@@ -65,7 +66,6 @@ func main() {
 	// 3. Initialize App
 	app := &App{
 		Config:         cfg,
-		simulatedState: make(map[string]bool),
 	}
 
 	// 4. Start Background Services
@@ -79,6 +79,7 @@ func main() {
 
 	// B. Time Syncer (PLC Clocks) - Delegated to http_server.go
 	go app.startTimeSyncer()
+
 
 	// 5. Start HTTP Server - Delegated to http_server.go
 	log.Printf("Starting HTTP server on %s...", cfg.ListenPort)

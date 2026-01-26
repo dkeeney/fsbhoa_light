@@ -58,12 +58,7 @@ func (app *App) StartBluehostPoller() {
 				if zoneID > 0 {
 					// ACTIVATE!
 					var pulseErr error
-					if app.isSimulationMode() {
-						pulseErr = app.setSimulatedState(fullConfig, zoneID, "on")
-					} else {
-						pulseErr = PulseZone(app.Config, fullConfig, zoneID, "on")
-					}
-
+					pulseErr = PulseZone(app.Config, fullConfig, zoneID, "on")
 					if pulseErr == nil {
 						log.Printf("Job #%d Success: Lights activated.", job.JobID)
 					} else {

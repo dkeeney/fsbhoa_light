@@ -98,7 +98,7 @@ const loadAllConfigData = async () => {
     }
 };
 
-// --- BACKGROUND POLLING: Update Bulbs on relay mapping screen Only (Safe for Editing) ---
+// --- BACKGROUND POLLING: Update Bulbs on Configuration relay mapping screen Only (Safe for Editing) ---
 // --- HELPER: Single Status Update (Shared Logic) ---
 const updateBulbsOnly = async () => {
     try {
@@ -107,6 +107,7 @@ const updateBulbsOnly = async () => {
         const liveStatus = await res.json();
 
         allMappings.forEach(map => {
+            // Find the bulb icon in the Relay Mapping table row
             const btn = document.querySelector(`.micro-btn[data-id="${map.id}"]`);
             if (!btn) return;
 
@@ -114,52 +115,46 @@ const updateBulbsOnly = async () => {
             const bulb = row.querySelector('.monitor-bulb');
             if (!bulb) return;
 
-            // --- 1. PHYSICAL STATUS & GET Y-NUMBER ---
-            // We must do this FIRST to define 'firstY' and 'monitoredOn'
+            // Determine if the schedule for this mapping's zone is active
+            let isSchedActive = false;
+            if (map.linked_zone_ids && map.linked_zone_ids.length > 0) {
+                const zoneId = map.linked_zone_ids[0];
+                const zone = allZones.find(z => z.id == zoneId);
+                if (zone && liveStatus[`Sched${zone.schedule_id}`] === true) {
+                    isSchedActive = true;
+                }
+            }
+
+            // Check if physical outputs are ON
             let monitoredOn = 0;
-            let firstY = 0; 
-            
             if (Array.isArray(map.plc_outputs)) {
                 map.plc_outputs.forEach(out => {
                     const key = `PLC${map.plc_id}-${out}`;
                     if (liveStatus[key] === true) monitoredOn++;
-                    
-                    // Capture the integer Y value (e.g. "Y107" -> 107) for the schedule lookup
-                    if (firstY === 0) {
-                        try { firstY = parseInt(out.replace('Y', ''), 10); } catch(e){}
-                    }
                 });
             }
 
-            // --- 2. SCHEDULE STATUS (The "Truth" from PLC DS1000) ---
-            let isSchedActive = false;
-            const specificMap = liveStatus[`schedule_map_${map.plc_id}`];
+            // Update classes for color logic
+            bulb.classList.remove('status-auto-on', 'status-manual-on', 'status-manual-off', 'status-auto-off');
+            
+            let newClass = '';
+            let newTooltip = '';
 
-            if (firstY > 0 && specificMap && specificMap.length > 0) {
-                // Reverse Engineer the Ladder Logic to find the Slot Index
-                const module = Math.floor(firstY / 100);     // 1
-                const bit = firstY % 100;                    // 7
-                const slotIndex = ((module - 1) * 8) + Math.floor((bit - 1) / 2);
-
-                // Look up in the SPECIFIC map
-                if (slotIndex >= 0 && slotIndex < specificMap.length) {
-                    const schedId = specificMap[slotIndex];
-                    if (schedId > 0 && liveStatus[`Sched${schedId}`] === true) {
-                        isSchedActive = true;
-                    }
-                }
+            if (monitoredOn > 0) {
+                newClass = isSchedActive ? 'status-auto-on' : 'status-manual-on';
+                newTooltip = 'ON';
+            } else {
+                newClass = isSchedActive ? 'status-manual-off' : 'status-auto-off';
+                newTooltip = 'OFF';
             }
 
-            // --- 3. DETERMINE COLOR ---
-            let newClass = (monitoredOn > 0) 
-                ? (isSchedActive ? 'status-auto-on' : 'status-manual-on')
-                : (isSchedActive ? 'status-manual-off' : 'status-auto-off');
-
-            bulb.classList.remove('status-auto-on', 'status-manual-on', 'status-manual-off', 'status-auto-off');
             bulb.classList.add(newClass);
+            bulb.title = newTooltip;
         });
 
-    } catch (e) { console.error("Update failed", e); }
+    } catch (e) {
+        console.error("Bulb update failed:", e);
+    }
 };
 
 
@@ -226,6 +221,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const deleteBtn = e.target.closest('.delete-zone-link');
             const qrBtn     = e.target.closest('.generate-qr-link');
             const isCancel  = e.target.matches('#cancel-edit-btn');
+            const timerBtn  = e.target.closest('.trigger-timer-link');
 
             if (editBtn || deleteBtn || qrBtn || isCancel || e.target.matches('#save-zone-assignments-btn')) {
                 e.preventDefault();
@@ -275,6 +271,27 @@ document.addEventListener('DOMContentLoaded', function () {
                 formContainer.style.display = 'none';
                 listContainer.style.display = 'block';
                 addNewBtn.style.display = 'inline-block';
+            }
+            else if (timerBtn) {
+                const zoneId = timerBtn.dataset.zoneId;
+
+                // Visual feedback: brief flash
+                timerBtn.style.opacity = '0.5';
+                
+                fetch(apiBaseUrl + 'trigger-timer', {
+                    method: 'POST',
+                    headers: apiPostHeaders,
+                    body: JSON.stringify({ zone_id: zoneId })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    timerBtn.style.opacity = '1';
+                    console.log('Timer triggered:', data.message);
+                })
+                .catch(err => {
+                    timerBtn.style.opacity = '1';
+                    alert('Error triggering timer: ' + err);
+                });
             }
         });
 

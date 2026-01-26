@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
         "strconv"
-        "sync"
         "time"
 
 	"github.com/julienschmidt/httprouter"
@@ -15,17 +14,6 @@ import (
 // App holds our application state, like the config.
 type App struct {
 	Config Config
-        simulatedState      map[string]bool
-	simulatedStateMutex sync.RWMutex
-}
-
-// isSimulationMode checks if PLC addresses are configured. If not, we're in sim mode.
-func (app *App) isSimulationMode() bool {
-	// Check if a PLC is configured. If not, we're in simulation mode.
-	if plc1Addr, ok := app.Config.PLCs[1]; !ok || plc1Addr == "" {
-		return true
-	}
-	return false
 }
 
 
@@ -38,6 +26,7 @@ func (app *App) RunServer() error {
 	router.POST("/override/zone/:id/:state", app.handleOverride)
 	router.GET("/status", app.handleStatus)
         router.POST("/test/mapping/:id/:state", app.handleTestMapping)
+        router.POST("/trigger/zone/:id", app.handleTriggerTimer)
 
 	// Use ListenPort from config
 	return http.ListenAndServe(app.Config.ListenPort, router)
@@ -62,17 +51,13 @@ func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ http
 	}
 
 	// Translate the config into PLC data and push it.
-        if !app.isSimulationMode() {
-		log.Println("Pushing config to PLCs...")
-		// Translate the config into PLC data and push it.
-		err = PushConfigurationToPLCs(app.Config, configData) // Existing function call
-		if err != nil {
-			log.Printf("Error pushing config to PLCs: %v", err)
-			http.Error(w, "Failed to push config to PLCs", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		log.Println("Simulation mode: Skipping PLC config push.")
+	log.Println("Pushing config to PLCs...")
+	// Translate the config into PLC data and push it.
+	err = PushConfigurationToPLCs(app.Config, configData) // Existing function call
+	if err != nil {
+		log.Printf("Error pushing config to PLCs: %v", err)
+		http.Error(w, "Failed to push config to PLCs", http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -93,11 +78,7 @@ func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 
-        if app.isSimulationMode() {
-		err = app.setSimulatedState(configData, zoneID, state)
-	} else {
-		err = PulseZone(app.Config, configData, zoneID, state) // Pass configData
-	}
+	err = PulseZone(app.Config, configData, zoneID, state) // Pass configData
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -114,21 +95,14 @@ func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httproute
         var status map[string]interface{}
 	var err error
 
-	// --- Check for simulation mode ---
-	if app.isSimulationMode() {
-		log.Println("Simulation mode: Reading from in-memory state.")
-		status, err = app.getSimulatedState()
-	} else {
-		//log.Println("Live mode: Fetching config and polling PLCs.")
-		// Fetch the config *each time* status is requested.
-		configData, err := FetchConfigurationFromAPI(app.Config)
-		if err != nil {
-			//log.Printf("Error fetching config for status: %v", err)
-			http.Error(w, "Failed to fetch config for status", http.StatusInternalServerError)
-			return
-		}
-		status, err = ReadStatusFromPLCs(app.Config, configData) // Pass configData
+	// Fetch the config *each time* status is requested.
+	configData, err := FetchConfigurationFromAPI(app.Config)
+	if err != nil {
+		//log.Printf("Error fetching config for status: %v", err)
+		http.Error(w, "Failed to fetch config for status", http.StatusInternalServerError)
+		return
 	}
+	status, err = ReadStatusFromPLCs(app.Config, configData) // Pass configData
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -138,64 +112,10 @@ func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httproute
 }
 
 
-// getSimulatedState reads from the internal map in a thread-safe way.
-func (app *App) getSimulatedState() (map[string]interface{}, error) {
-	app.simulatedStateMutex.RLock()         // Lock for reading
-	defer app.simulatedStateMutex.RUnlock() // Unlock when done
-
-	// Create a new map to return
-	status := make(map[string]interface{})
-
-	// Copy all the values
-	for key, value := range app.simulatedState {
-		status[key] = value
-	}
-
-	// Manually add Photocell so the UI doesn't break
-	if _, ok := status["Photocell"]; !ok {
-		status["Photocell"] = false // Simulate daylight
-	}
-
-	return status, nil
-}
-
-// setSimulatedState writes to the internal map in a thread-safe way.
-func (app *App) setSimulatedState(configData *FullConfigurationData, zoneID int, state string) error {
-	// This logic mimics how the UI determines state: by the *first* output in the mapping.
-	for _, mapping := range configData.Mappings {
-		isForThisZone := false
-		for _, linkedZoneID := range mapping.LinkedZoneIDs {
-			if linkedZoneID == zoneID {
-				isForThisZone = true
-				break
-			}
-		}
-
-		if isForThisZone && len(mapping.PLCOutputs) > 0 {
-			outputToToggle := mapping.PLCOutputs[0] // Get the "ON" output
-                        plcID := mapping.PLCID
-			
-                        uniqueKey := fmt.Sprintf("PLC%d-%s", plcID, outputToToggle) // e.g., "PLC1-Y101"
-			app.simulatedStateMutex.Lock() // Lock for writing
-			if state == "on" {
-				app.simulatedState[uniqueKey] = true
-			} else {
-				app.simulatedState[uniqueKey] = false
-			}
-			log.Printf("SIMULATOR: Set %s = %t", outputToToggle, app.simulatedState[uniqueKey])
-			app.simulatedStateMutex.Unlock() // Unlock
-		}
-	}
-	return nil
-}
 
 
 // startTimeSyncer runs a continuous loop to keep PLC clocks in sync.
 func (app *App) startTimeSyncer() {
-	if app.isSimulationMode() {
-		log.Println("Simulation mode: Skipping background time sync.")
-		return
-	}
 
 	log.Println("Starting background time sync service (runs every hour)...")
 	ticker := time.NewTicker(1 * time.Hour)
@@ -218,7 +138,7 @@ func (app *App) syncAllPLCsTime() {
 			continue // Skip unconfigured PLCs
 		}
 		log.Printf("Syncing time for PLC %d at %s...", plcID, host)
-		if err := SetPLCTime(host); err != nil {
+		if err := SetPLCTime(plcID, host); err != nil {
 			// Just log the error, don't stop the service
 			log.Printf("ERROR: Failed to sync time for PLC %d: %v", plcID, err)
 		}
@@ -237,15 +157,39 @@ func (app *App) handleTestMapping(w http.ResponseWriter, r *http.Request, ps htt
 		return
 	}
 
-	if app.isSimulationMode() {
-		log.Println("Simulation: Test Pulse ignored.")
-	} else {
-		err = PulseMapping(app.Config, configData, mappingID, state)
-	}
-
+	err = PulseMapping(app.Config, configData, mappingID, state)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
+
+// handleTriggerTimer is called when someone clicks the clock icon in WordPress, or activates a QR code.
+func (app *App) handleTriggerTimer(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	zoneID, _ := strconv.Atoi(ps.ByName("id"))
+	log.Printf("Received TIMER TRIGGER request for Zone %d", zoneID)
+
+	// 1. Fetch current config to find the mapping for this zone
+	configData, err := FetchConfigurationFromAPI(app.Config)
+	if err != nil {
+		log.Printf("Error fetching config for timer trigger: %v", err)
+		http.Error(w, "Failed to fetch configuration", http.StatusInternalServerError)
+		return
+	}
+
+	// 2. Execute the trigger
+	// We pulse the "ON" bit (C201+) for this zone.
+	// Your existing PulseZone function in plc_client.go handles finding 
+	// all lights associated with this zone and pulsing their ON bits.
+	err = PulseZone(app.Config, configData, zoneID, "on")
+	if err != nil {
+		log.Printf("Error pulsing PLC for zone %d: %v", zoneID, err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Timer trigger sent for zone %d", zoneID)
+}
+
+

@@ -29,8 +29,8 @@ Save it for future reference when working with AI.
 // Main loop
 // ---------------------------------
 // Rung 1: Clock Calc & Always_OFF Bit
-Rung 1: [Always ON] -> (MATH DS30 = (SD24 * 100) + SD25)
-Rung 2: [Always ON] -> (RST C1020) // Always_OFF bit
+Rung 1: [Always] -> (MATH DS30 = (SD24 * 100) + SD25)
+Rung 2: [Always] -> (RST C1020) // Always_OFF bit
 
 // === Master/Slave Logic (Photocell is remote) ===
 // If I am the master and we send X001 to C154.
@@ -48,11 +48,11 @@ Rung 3:  [SC2]  ->(Set C153)
 
 Rung 4:  [C153]            [NOT X001]   -> (RST C154)
                 (parallel) [X001]       -> (OUT C154)
-Rung 5:  [NOT C153] [SC4] -> (RECV)  Via WLAN IP: 192.168.42.61
+Rung 5:  [NOT C153] [SC4] -> (RECV  Via WLAN IP: 192.168.42.61
                              ServerPortNo: 502, Slave ID 1
                              Modbus Function code: 01
                              Slave Addr: C154, 1 bit.
-                             Master:  C154 (Photocell_State)
+                             Master:  C154 Photocell_State)
 
 
 
@@ -112,19 +112,19 @@ Rung 9:    [CMP DS3 == 1] [C151] -> (SET C152) // Start "Sync Active" mode
 // ---------------------------------
 // pointer to the sched ID, Current State, Previous State, and On/Off requests for
 // this pair of outputs.
-Rung 10:   [Always ON] -> (MATH DS20 = DS3 + 999)
-Rung 11:   [Always ON] -> (COPY DS[DS20] -> DS10)
-Rung 12:   [Always ON] -> (MATH DS15 = DS3 + 100)
-Rung 13:   [Always ON] -> (MATH DS16 = DS3 + 200)
-Rung 14:   [Always ON] -> (MATH DS17 = DS3 + 250)
-Rung 15:   [Always ON] -> (MATH DS50 = DS10+ 50)
+Rung 10:   [Always] -> (MATH DS20 = DS3 + 999)
+Rung 11:   [Always] -> (COPY DS[DS20] -> DS10)
+Rung 12:   [Always] -> (MATH DS15 = DS3 + 100)
+Rung 13:   [Always] -> (MATH DS16 = DS3 + 200)
+Rung 14:   [Always] -> (MATH DS17 = DS3 + 250)
+Rung 15:   [Always] -> (MATH DS50 = DS10+ 50)
 
 
 //  Dereference Request Bits
-Rung 16:   [Always ON] -> (COPY C[DS10] -> C1002)   // Get New Sched State (C1-C12)
-Rung 17:   [Always ON] -> (COPY C[DS50] -> C1003)   // Get Prev Sched State (C51-C62)
-Rung 18:   [Always ON] -> (COPY C[DS16] -> C1009)   // Get ReqON
-Rung 19:   [Always ON] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
+Rung 16:   [Always] -> (COPY C[DS10] -> C1002)   // Get New Sched State (C1-C12)
+Rung 17:   [Always] -> (COPY C[DS50] -> C1003)   // Get Prev Sched State (C51-C62)
+Rung 18:   [Always] -> (COPY C[DS16] -> C1009)   // Get ReqON
+Rung 19:   [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 
 // == Schedule Transition Check (next two Rungs) ==
 // Generate ON Request (on Schedule OFF-to-ON transition)
@@ -139,18 +139,10 @@ Rung 19:   [Always ON] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 // are changed, or to cancel all manual overrides.
 //
 //  "ON" Request Logic  (schedule transition ON to OFF)
-                                               +-- [NOT C1003] --+
-                                               |                 |
-Rung 20: [NOT C1005]--[CMP DS10 > 0]--[C1002]--+                 +- [NOT T2]--(COPY SC1 -> C[DS16])
-                                               |                 |
-                                               +---- [C152] -----+
+Rung 20: [[NOT C1005] [CMP DS10 > 0] [C1002]] [OR [NOT C1003] [C152]] [NOT T2]  (COPY SC1 -> C[DS16])
 
 //  "OFF" Request Logic  (schedule transition OFF to ON)
-                                                   +-- [C1003] --+
-                                                   |             |
-Rung 21: [NOT C1005]--[CMP DS10 > 0]--[NOT C1002]--+             +- [NOT T2]--(COPY SC1 -> C[DS17])
-                                                   |             |
-                                                   +---- [C152] -+
+Rung 21: [NOT C1005]  [CMP DS10 > 0]  [NOT C1002] [OR [C1003] [C152]] [NOT T2]--(COPY SC1 -> C[DS17])
 
 // == Physical Output Logic ==
 // Calculate which 16-bit YD word to use (100, 200, or 300) each corresponds
@@ -159,14 +151,14 @@ Rung 21: [NOT C1005]--[CMP DS10 > 0]--[NOT C1002]--+             +- [NOT T2]--(C
 // drive no more than 4 relays at a time and in some cases the relay driver will
 // drive 3 relays from one output.
 
-Rung 22:   [Always ON] -> (MATH DS80 = (DS3-1)/8+1)
-Rung 23:   [Always ON] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
-Rung 24:   [Always ON] -> (COPY DS82 -> DH82)
-Rung 25:   [Always ON] -> (COPY 1h  -> DH81)
-Rung 26:   [Always ON] -> (MATH DH83 = LSH(DH81, DH82)  // ON bit mask
-Rung 27:   [Always ON] -> (MATH DH84 = LSH(DH83, 1h)    // OFF bit mask
-Rung 28:   [Always ON] -> (COPY DH83 -> DS83)
-Rung 29:   [Always ON] -> (COPY DH84 -> DS84)
+Rung 22:   [Always] -> (MATH DS80 = (DS3-1)/8+1)
+Rung 23:   [Always] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
+Rung 24:   [Always] -> (COPY DS82 -> DH82)
+Rung 25:   [Always] -> (COPY 1h  -> DH81)
+Rung 26:   [Always] -> (MATH DH83 = LSH(DH81, DH82)  // ON bit mask
+Rung 27:   [Always] -> (MATH DH84 = LSH(DH83, 1h)    // OFF bit mask
+Rung 28:   [Always] -> (COPY DH83 -> DS83)
+Rung 29:   [Always] -> (COPY DH84 -> DS84)
 // NOTE: technically, we could use DH83 and DH84 below rather than DS83 and DS84.
 
 
@@ -201,16 +193,18 @@ Rung 34:   [C1008] -> (TMR T2 K2)  200ms
 //  Clean up Timers and Busy Flag
 Rung 35:   [T2] -> (RST C1005)
              (parallel) -> (RST C1008)
+
              // note that after clearing C1008, Timer T2 will not clear
              //      until the next empty pass.
 
 // ---------------------------------
 // End of Program
 // ---------------------------------
-Rung 36: [Always ON] -> (END)
+Rung 36: [Always] -> (END)
 
 
 //=================================================================================
+## Subroutine: SCHED_ENGINE
 // ---------------------------------
 // 2. Schedule Engine  Subroutine
 // ---------------------------------
@@ -233,25 +227,25 @@ Rung 36: [Always ON] -> (END)
 // Each Light (actually the H-Bridge that drives a set of relays)
 // must have a reference to a schedule.
 //  (This FOR loop uses DS1 as its counter, 1-168)
-Rung 1: [Always ON]   -> (COPY 1 -> DS1)
-Rung 2: [Always ON]   -> (FOR 168)
+Rung 1: [Always]   -> (COPY 1 -> DS1)
+Rung 2: [Always]   -> (FOR 168)
 
 //  Calculate Schedule Index (1-12) and Span Index (0-13)
-Rung 3:    [Always ON] -> (MATH DS4 = (DS1 - 1) / 14 + 1)  // Calc Sched_Index
-Rung 4:    [Always ON] -> (MATH DS2 = (DS1 - 1) MOD 14)    // Calc Span_Index
+Rung 3:    [Always] -> (MATH DS4 = (DS1 - 1) / 14 + 1)  // Calc Sched_Index
+Rung 4:    [Always] -> (MATH DS2 = (DS1 - 1) MOD 14)    // Calc Span_Index
 
 //  Reset Temp bits on the *first span* of a schedule
-Rung 5:    [CMP DS2 == 0] -> (RST C1001) // Temp_Span_Active
-Rung 6:    [Always ON] -> (RST C1011 to C1012) // Temp_Span_Start_OK
-                                               // Temp_Span_End_OK
+Rung 5:    [CMP DS2 == 0] -> (RST C1001)    // Temp_Span_Active
+Rung 6:    [Always] -> (RST C1011 to C1012) // Temp_Span_Start_OK
+                                            // Temp_Span_End_OK
 
 //  Calculate Span Table Pointer
-Rung 7:    [Always ON] -> (MATH DS21 = (DS4-1)*70 + DS2*5 + 100)  // Ptr Span Base
+Rung 7:    [Always] -> (MATH DS21 = (DS4-1)*70 + DS2*5 + 100)  // Ptr Span Base
 
 // == Day of Week Check  ==
-Rung 8:    [Always ON] -> (MATH DS42 = SD23 - 1)    // current day
-Rung 9:    [Always ON] -> (COPY DS[DS21] -> DH49)
-Rung 10:   [Always ON] -> (COPY 0h -> DH41)
+Rung 8:    [Always] -> (MATH DS42 = SD23 - 1)    // current day
+Rung 9:    [Always] -> (COPY DS[DS21] -> DH49)
+Rung 10:   [Always] -> (COPY 0h -> DH41)
 // Check for Sunday (Day 0) & bit 0
 Rung 11:   [CMP DS42 == 0] -> (MATH DH41 = DH49 & 1h)
 // Check for Monday (Day 1) & bit 1
@@ -271,17 +265,17 @@ Rung 18:   [CMP DH41 > 0] -> (OUT C1000) // Temp_Day_OK
 
 // == Time/Trigger Check (Rungs 16-24) ==
 // Get OnTrig; indicates if this segment is Turned on by Photo Cell or Start Time
-Rung 19:   [Always ON] -> (MATH DS47 = DS21 + 1)
-Rung 20:   [Always ON] -> (COPY DS[DS47] -> DS43)
+Rung 19:   [Always] -> (MATH DS47 = DS21 + 1)
+Rung 20:   [Always] -> (COPY DS[DS47] -> DS43)
 // Get OnTime, Note: Time is HHMM 24hr
-Rung 21:   [Always ON] -> (MATH DS47 = DS21 + 2)
-Rung 22:   [Always ON] -> (COPY DS[DS47] -> DS45)
+Rung 21:   [Always] -> (MATH DS47 = DS21 + 2)
+Rung 22:   [Always] -> (COPY DS[DS47] -> DS45)
 // Get OffTrig; indicates if is turned off by Photo cell or End Time
-Rung 23:   [Always ON] -> (MATH DS48 = DS21 + 3)
-Rung 24:   [Always ON] -> (COPY DS[DS48] -> DS44)
+Rung 23:   [Always] -> (MATH DS48 = DS21 + 3)
+Rung 24:   [Always] -> (COPY DS[DS48] -> DS44)
 // Get OffTime, Note: Time is HHMM 24hr
-Rung 25:   [Always ON] -> (MATH DS48 = DS21 + 4)
-Rung 26:   [Always ON] -> (COPY DS[DS48] -> DS46)
+Rung 25:   [Always] -> (MATH DS48 = DS21 + 4)
+Rung 26:   [Always] -> (COPY DS[DS48] -> DS46)
 // Determine if start is ok (beyond start time or photocell on)
 Rung 27:   [C1000] [CMP DS43 == 0] [CMP DS30 >= DS45] -> (SET C1011)
 Rung 28:   [C1000] [CMP DS43 != 0] [C154] -> (SET C1011)
@@ -297,39 +291,39 @@ Rung 31:   [C1011] [C1012] -> (SET C1001)
 Rung 32:   [CMP DS2 == 13] -> (COPY C1001 -> C[DS4])
 
 //  Next (ends the 1-168 loop)
-Rung 33:   [Always ON] -> (MATH DS1 = DS1 + 1)
-Rung 34:   [Always ON] -> (NEXT)
+Rung 33:   [Always] -> (MATH DS1 = DS1 + 1)
+Rung 34:   [Always] -> (NEXT)
 
 //  Return from Subroutine
-Rung 35:   [Always ON] -> (RET)
+Rung 35:   [Always] -> (RET)
 
 
 
 ================================================================================
 ## Subroutine: LATCH_ENGINE
-Plaintext
+//Plaintext
 
 // ---------------------------------
-// Subroutine: LATCH_ENGINE
+//Subroutine: LATCH_ENGINE
 // ---------------------------------
 // For all Schedules, make the current schedule state the previous Schedule
 // Start 12 Schedule Loop
 // (This FOR loop uses DS5 as its counter, 1-12)
-Rung 1: [Always ON] -> (Copy 1 -> DS5)
-Rung 2: [Always ON] -> (FOR 12)
+Rung 1: [Always] -> (Copy 1 -> DS5)
+Rung 2: [Always] -> (FOR 12)
 
 // Calculate Pointer to C51-C62
-Rung 3:    [Always ON] -> (MATH DS50 = DS5 + 50)
+Rung 3:    [Always] -> (MATH DS50 = DS5 + 50)
 
 //  Copy Current State (C1-C12) to Previous State (C51-C62)
-Rung 4:    [Always ON] -> (COPY C[DS5] -> C[DS50])
+Rung 4:    [Always] -> (COPY C[DS5] -> C[DS50])
 
 //  Next Schedule
-Rung 5: [Always ON] -> (MATH DS5 = DS5 + 1)
-Rung 5: [Always ON] -> (NEXT)
+Rung 5: [Always] -> (MATH DS5 = DS5 + 1)
+Rung 5: [Always] -> (NEXT)
 
 // Return from Subroutine
-Rung 5: [Always ON] -> (RET)
+Rung 5: [Always] -> (RET)
 
 
 
@@ -337,7 +331,7 @@ Rung 5: [Always ON] -> (RET)
 
 ================================================================================
 
-// Memory Map:
+## Memory Map:
 X001   - photocell input
 C1   to C12  - Current state of a schedule
 C51  to C62  - Previous state of a schedule

@@ -43,18 +43,13 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const rows = zoneData.map(zone => {
-            // 1. Find all mappings for this zone
+            // 1. Find mappings and calculate if lights are physically ON
             const zoneMappings = mappingData.filter(m => zone.mapping_ids.includes(m.id));
-            
             let totalLights = 0;
             let lightsOn = 0;
-            let plcID = 0; // Use the first found PLC ID for override logic later
 
-            // 2. Count ON vs OFF lights
             zoneMappings.forEach(mapping => {
-                plcID = mapping.plc_id; 
                 if (mapping.plc_outputs && mapping.plc_outputs.length > 0) {
-                    // FIX: Only check the first output (the Control/ON wire)
                     const output = mapping.plc_outputs[0];
                     totalLights++;
                     const uniqueKey = `PLC${mapping.plc_id}-${output}`;
@@ -62,105 +57,80 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             });
 
-            // 3. Determine Schedule State
-            // The Go service now sends "Sched1": true, "Sched5": false, etc.
-            const schedID = zone.schedule_id;
-            const isSchedActive = status[`Sched${schedID}`] === true;
+            // 2. Schedule and Timer Logic
+            const isSchedActive = status[`Sched${zone.schedule_id}`] === true;
+            const remaining = status[`timer_zone_${zone.id}`] || 0;
 
-            // 4. Calculate Status Logic
+            // 3. Determine Color Class
             let statusClass = '';
-            let statusLabel = '';
             let tooltip = '';
-            
-            // --- Determine Base Color (State) ---
-            if (lightsOn > 0) {
-                // Zone has Light (Full or Partial)
-                statusLabel = 'ON';
-                
-                if (isSchedActive) {
-                    // Schedule says ON + Light detected -> YELLOW (Auto)
-                    statusClass = 'status-auto-on';
-                    tooltip = 'Auto ON (Schedule Active)';
-                } else {
-                    // Schedule says OFF + Light detected -> ORANGE (Manual)
-                    statusClass = 'status-manual-on';
-                    tooltip = 'Manual ON (Override)';
-                }
-            } 
-            else {
-                // Zone is Dark
-                statusLabel = 'OFF';
-                
-                if (isSchedActive) {
-                    // Schedule says ON + No Light -> BLUE (Manual OFF)
-                    statusClass = 'status-manual-off';
-                    tooltip = 'Manual OFF (Override)';
-                } else {
-                    // Schedule says OFF + No Light -> BLACK (Auto)
-                    statusClass = 'status-auto-off';
-                    tooltip = 'Off';
-                }
+            const isActuallyOn = lightsOn > 0;
+
+            if (isActuallyOn) {
+                statusClass = isSchedActive ? 'status-auto-on' : 'status-manual-on';
+                tooltip = isSchedActive ? 'Auto ON (Schedule)' : 'Manual ON (Override)';
+            } else {
+                statusClass = isSchedActive ? 'status-manual-off' : 'status-auto-off';
+                tooltip = isSchedActive ? 'Manual OFF (Override)' : 'Off';
             }
 
-            // --- Determine Animation (Consistency) ---
-            if (lightsOn > 0 && lightsOn < totalLights) {
-                // Mixed State -> Add Pulse
+            if (isActuallyOn && lightsOn < totalLights) {
                 statusClass += ' status-pulsing';
                 tooltip += ` - PARTIAL (${lightsOn}/${totalLights})`;
             }
 
+            // 4. State Column: Bulb + (Clock or Minutes) - Fixed Wrapping
+            let timerHtml = '';
+            if (zone.is_timed == 1) {
+                if (remaining > 0) {
+                    // Show minutes
+                    timerHtml = `<strong style="font-size:11px; color:#2271b1; font-family:monospace; margin-left:6px;">${remaining}m</strong>`;
+                } else {
+                    // Show clock icon when idle
+                    timerHtml = `<span class="dashicons dashicons-clock" style="color:#ccc; font-size:17px; margin-left:6px; vertical-align:middle;" title="Timed Zone Idle"></span>`;
+                }
+            }
 
-            // Render the Bulb Icon & Timer
-            const remaining = status[`Timer${zone.id}`] || 0;
-            const timerHtml = remaining > 0 ? `<div style="font-size:10px; color:#2271b1; font-weight:bold;">${Math.ceil(remaining/60)}m left</div>` : '';
-            const statusText = `
-                <div style="text-align:center;">
-                    <span class="dashicons dashicons-lightbulb monitor-bulb ${statusClass}" title="${tooltip}"></span>
+            // Use flexbox to keep them on the same row and centered
+            const statusDisplay = `
+                <div style="display: flex; align-items: center; justify-content: center; min-height: 24px;">
+                    <span class="dashicons dashicons-lightbulb monitor-bulb ${statusClass}" title="${tooltip}" style="font-size:18px; width:18px; height:18px;"></span>
                     ${timerHtml}
                 </div>`;
 
-            // --- Override Links (Same as before) ---
-            // We disable the link matching the current state
-            const onLinkClasses = `override-link ${statusLabel === 'ON' ? 'is-disabled' : ''}`;
-            const offLinkClasses = `override-link ${statusLabel === 'OFF' ? 'is-disabled' : ''}`;
-            
+            // 5. Manual Control Links
+            const currentLabel = isActuallyOn ? 'ON' : 'OFF';
+            const onLinkClasses = `override-link ${currentLabel === 'ON' ? 'is-disabled' : ''}`;
+            const offLinkClasses = `override-link ${currentLabel === 'OFF' ? 'is-disabled' : ''}`;
+
             const overrideLinks = `
-                <a href="#" class="${onLinkClasses}" data-zone-id="${zone.id}" data-state="on" title="Turn Zone ON">ON</a>
+                <a href="#" class="${onLinkClasses}" data-zone-id="${zone.id}" data-state="on">ON</a>
                 <span style="margin: 0 5px; color: #ccc;">|</span>
-                <a href="#" class="${offLinkClasses}" data-zone-id="${zone.id}" data-state="off" title="Turn Zone OFF">OFF</a>
+                <a href="#" class="${offLinkClasses}" data-zone-id="${zone.id}" data-state="off">OFF</a>
             `;
-            const schedBadge = isSchedActive 
-                ? '<span style="color:#46b450; font-weight:bold; font-size:11px;">ACTIVE</span>' 
+
+            const schedBadge = isSchedActive
+                ? '<span style="color:#46b450; font-weight:bold; font-size:11px;">ACTIVE</span>'
                 : '<span style="color:#ccc; font-size:11px;">Inactive</span>';
 
             return `
                 <tr>
-                    <td style="font-weight:600; font-size:13px; color:#222;">
-                        ${escapeHTML(zone.zone_name)}
-                    </td>
-                    <td>
-                        ${schedBadge}
-                    </td>
-                    <td>
-                        <div class="state-wrapper">
-                            ${statusText} 
-                            <span class="state-label">${statusLabel}</span>
-                        </div>
-                    </td>
+                    <td style="font-weight:600; font-size:13px; color:#222;">${escapeHTML(zone.zone_name)}</td>
+                    <td>${schedBadge}</td>
+                    <td>${statusDisplay}</td>
                     <td style="text-align:right;">
                         <div style="display:flex; justify-content:flex-end; gap:4px; align-items:center;">
                             ${overrideLinks}
                         </div>
                     </td>
-                </tr>
-            `;
+                </tr>`;
         }).join('');
 
+        // --- Photocell and Header Logic ---
         const photocellStatus = status['Photocell'] === true
             ? '<span style="color: #333; font-weight: bold;">DARK</span> (Lights enabled)'
             : '<span style="color: orange; font-weight: bold;">LIGHT</span> (Lights disabled by daylight)';
 
-        // Show current polling speed
         const isBursting = typeof burstEndTime !== 'undefined' && Date.now() < burstEndTime;
         const refreshRate = isBursting ? "Turbo (0.2s)" : "2s";
 

@@ -44,6 +44,19 @@ type FullConfigurationData struct {
 	Schedules []FullConfigSchedule `json:"schedules"`
 }
 
+const (
+    // DS1101-DS1124 store the remaining minutes for outputs 1-24
+    // (DS1100 is the base, so zoneID 1 = 1101)
+    TimerStartAddress = 1100
+
+    // DS951-DS974 store the mode (0=Standard, 1=Timed)
+    // (DS950 is the base, so zoneID 1 = 951)
+    ModeStartRegister = 950
+
+    // C201-C224 are the RequestON bits used to pulse the timer start
+    SwipePulseStartBit = 200
+)
+
 // --- Main Functions ---
 
 // FetchConfigurationFromAPI 
@@ -197,6 +210,7 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 		log.Printf("Connecting to PLC %d at %s...", plcID, host)
 		handler := modbus.NewTCPClientHandler(host)
 		handler.Timeout = 10 * time.Second
+                handler.SlaveId = byte(plcID)
 		client := modbus.NewClient(handler)
 		err := handler.Connect()
 		if err != nil {
@@ -249,6 +263,7 @@ func ConfigurePLCModes(cfg Config, data *FullConfigurationData) error {
 	for plcID, plcAddr := range cfg.PLCs {
 		handler := modbus.NewTCPClientHandler(plcAddr)
 		handler.Timeout = 2 * time.Second
+                handler.SlaveId = byte(plcID)
 		client := modbus.NewClient(handler)
 		if err := handler.Connect(); err != nil {
 			log.Printf("Error connecting to PLC %d: %v", plcID, err)
@@ -258,15 +273,16 @@ func ConfigurePLCModes(cfg Config, data *FullConfigurationData) error {
 
 		// Inner Loop: Iterate through the 24 physical outputs
 		for i := 1; i <= 24; i++ {
-			// Calculate Register Address: DS950 for Output 1
-			regAddr := uint16(950 + (i - 1))
+			// Calculate Register Address: DS951 for Output 1
+			// ModeStartRegister is 950. Modbus address 950 points to DS951.
+			regAddr := uint16(ModeStartRegister + (i - 1))
 
 			// Determine Mode (Lookup Light -> Zone)
 			modeVal := getModeForPLCInstance(data, plcID, i)
 
 			// Write to PLC
-                        if _, err := client.WriteSingleRegister(regAddr, modeVal); err != nil {
-				log.Printf("Error writing Mode Reg %d on PLC %d: %v", regAddr, plcID, err)
+			if _, err := client.WriteSingleRegister(regAddr, modeVal); err != nil {
+				log.Printf("Error writing Mode Reg %d on PLC %d: %v", regAddr+1, plcID, err)
 			}
 		}
 		
@@ -314,6 +330,7 @@ func PulseZone(cfg Config, configData *FullConfigurationData, zoneID int, state 
 
 	// --- Create a list of all lights to pulse ---
 	type pulseTarget struct {
+                plcID     int
 		host      string
 		loopIndex int
 		outputs   []string // For logging
@@ -340,7 +357,11 @@ func PulseZone(cfg Config, configData *FullConfigurationData, zoneID int, state 
 					continue // Skip this mapping
 				}
 
-				targets = append(targets, pulseTarget{host: host, loopIndex: loopIndex, outputs: mapping.PLCOutputs})
+				targets = append(targets, pulseTarget{
+					plcID: mapping.PLCID, 
+					host: host, 
+					loopIndex: loopIndex, 
+					outputs: mapping.PLCOutputs})
 
 				// Do NOT break; continue searching for more mappings for this zone
 			}
@@ -373,7 +394,7 @@ func PulseZone(cfg Config, configData *FullConfigurationData, zoneID int, state 
 		log.Printf("  -> Pulsing %s (%s) on PLC %s (Loop %d)", stateStr, target.outputs[0], target.host, target.loopIndex+1)
 
 		// Send the pulse
-		err := setPLCBit(target.host, addrToSet)
+		err := setPLCBit(target.plcID, target.host, addrToSet)
 		if err != nil {
 			log.Printf("  -> ERROR pulsing %s: %v", target.host, err)
 			lastErr = err // Store the last error we saw
@@ -440,6 +461,7 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 		// log.Printf("Polling PLC %d at %s", plcID, host)
 		handler := modbus.NewTCPClientHandler(host)
 		handler.Timeout = 5 * time.Second
+                handler.SlaveId = byte(plcID)
 		client := modbus.NewClient(handler)
 		err := handler.Connect()
 		if err != nil {
@@ -497,6 +519,26 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
     			log.Printf("Error reading Schedule Map (DS1000) from PLC %d: %v", plcID, err)
 		}
 
+                // ---  Read Countdown Timers (DS1101 - DS1124) ---
+		// TimerStartAddress is 1100 (DS1101 is offset 1100)
+		timerBytes, err := client.ReadHoldingRegisters(uint16(TimerStartAddress), 24)
+		if err == nil && len(timerBytes) >= 48 {
+			for i := 0; i < 24; i++ {
+				minutes := int(uint16(timerBytes[i*2])<<8 | uint16(timerBytes[i*2+1]))
+				if minutes > 0 {
+					// We need to find which Zone ID is linked to this physical output (i)
+					for _, m := range configData.Mappings {
+						if m.PLCID == plcID && calculateLoopIndex(m.PLCOutputs[0]) == i {
+							if len(m.LinkedZoneIDs) > 0 {
+								zoneID := m.LinkedZoneIDs[0]
+								fullStatus[fmt.Sprintf("timer_zone_%d", zoneID)] = minutes
+							}
+						}
+					}
+				}
+			}
+		}
+
 		// C. Read C1-C12 (Schedules) - Lodge Only
 		if plcID == 1 {
 			schedBitsAddr, _ := cBitToModbusAddress(1)
@@ -510,7 +552,7 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 					if len(schedResults) > byteIndex {
 						val := (schedResults[byteIndex] >> bitIndex) & 1
 						
-						// FIX: Map Slot ID (i+1) back to DB ID
+						//  Map Slot ID (i+1) back to DB ID
 						slotID := i + 1
 						if dbID, ok := plcSlotToDBID[slotID]; ok {
 							fullStatus[fmt.Sprintf("Sched%d", dbID)] = (val == 1)
@@ -619,9 +661,10 @@ func u16SliceToBytes(data []uint16) []byte {
 	return bytes
 }
 
-func SetPLCTime(host string) error {
+func SetPLCTime(plcID int, host string) error {
 	handler := modbus.NewTCPClientHandler(host)
 	handler.Timeout = 5 * time.Second
+        handler.SlaveId = byte(plcID)
 	client := modbus.NewClient(handler)
 	err := handler.Connect()
 	if err != nil {
@@ -675,9 +718,10 @@ func SetPLCTime(host string) error {
 }
 
 
-func setPLCBit(host string, address uint16) error {
+func setPLCBit(plcID int, host string, address uint16) error {
 	handler := modbus.NewTCPClientHandler(host)
 	handler.Timeout = 5 * time.Second
+        handler.SlaveId = byte(plcID)
 	client := modbus.NewClient(handler)
 	err := handler.Connect()
 	if err != nil {
@@ -698,16 +742,17 @@ func GlobalSync(cfg Config) error {
 	log.Println("Triggering Global Sync on all PLCs...")
 	for id, plcAddr := range cfg.PLCs {
 		// Use our helper to trigger C151
-		triggerPLCSync(plcAddr)
+		triggerPLCSync(id, plcAddr)
 		log.Printf("   -> Sync requested for PLC %d (%s)", id, plcAddr)
 	}
 	return nil
 }
 
 // Helper: Sends the "Doorbell Ring" (C151) to a specific PLC to force a Sync
-func triggerPLCSync(host string) error {
+func triggerPLCSync(plcID int, host string) error {
 	handler := modbus.NewTCPClientHandler(host)
 	handler.Timeout = 2 * time.Second
+        handler.SlaveId = byte(plcID)
 	client := modbus.NewClient(handler)
 	if err := handler.Connect(); err != nil {
 		log.Printf("Error connecting to PLC %s for sync: %v", host, err)
@@ -774,6 +819,6 @@ func PulseMapping(cfg Config, configData *FullConfigurationData, mappingID int, 
 	}
 
 	log.Printf("  -> TEST PULSE: %s on PLC %s", stateStr, host)
-	return setPLCBit(host, addrToSet)
+	return setPLCBit(targetMapping.PLCID, host, addrToSet)
 }
 

@@ -133,14 +133,19 @@ function fsbhoa_lighting_trigger_go_service_sync() {
     // Get the saved settings to find the port
     $options = get_option('fsbhoa_lighting_settings');
     $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
+    $api_key = isset($options['go_service_api_key']) ? sanitize_text_field($options['go_service_api_key']) : '';
     $service_url = sprintf('http://localhost:%d/sync', $port);
 
     // Use wp_remote_post for a non-blocking (fire-and-forget) request.
     // We set 'blocking' to false and 'timeout' to a very low value.
     wp_remote_post( $service_url, array(
         'method'    => 'POST',
-        'timeout'   => 1, // Don't wait more than 1 second
-        'blocking'  => false, // Return immediately, don't wait for the response
+        'timeout'   => 5, // Don't wait more than 5 second
+        'blocking'  => true, 
+        'headers'   => array(
+            'X-API-Key'    => $api_key,
+            'Content-Type' => 'application/json'
+        )
     ) );
 }
 

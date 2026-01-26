@@ -7,8 +7,14 @@ function renderZonesTable(container, saveBtn, allZones, allSchedules) {
             <tr>
                 <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
                 <td>${escapeHTML(zone.description)}</td>
-                <td style="text-align: center;">${zone.is_timed == 1 ? 
-                    '<span class="dashicons dashicons-clock" title="Timed Zone" style="color:#2271b1;"></span>' : ''}</td>
+                <td style="text-align: center; white-space: nowrap; width: 60px;">
+                    ${zone.is_timed == 1 ? `
+                        <a href="#" class="trigger-timer-link" data-zone-id="${zone.id}" title="Manually Start 90-Minute Timer" style="text-decoration:none; display: block; min-height: 20px;">
+                            <span class="dashicons dashicons-clock" id="timer-icon-${zone.id}" style="color:#2271b1; font-size:18px; vertical-align:middle;"></span>
+                            <strong class="zone-timer-countdown" id="timer-zone-${zone.id}" style="color:#2271b1; font-family:monospace; font-size:14px; display:none;"></strong>
+                        </a>
+                    ` : ''}
+                </td>
                 <td>
                     <select class="zone-schedule-select" data-zone-id="${zone.id}" style="width: 100%;">
                         <option value="0">-- None --</option>
