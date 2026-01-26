@@ -213,7 +213,7 @@ class CLICKParser:
 
     def _parse_recursive_conds(self, text):
         results = []
-        # Find top-level bracketed groups: looks for [ ... ] 
+        # Find top-level bracketed groups: looks for [WORD  ...] 
         # but handles cases where brackets are adjacent
         tokens = re.findall(r"\[([^\[\]]+|\[[^\[\]]+\])\]", text)
         
@@ -247,22 +247,48 @@ class CLICKParser:
         clean_text = re.sub(r"//.*$", "", text).strip()
         
         # 2. Extract balanced parentheses blocks
-        # This regex looks for: (Instruction ARGS)
-        # It handles nested parentheses by looking for the outermost pairs
-        pattern = r"\((\w+)(?:\s+((?:[^\(\)]|\([^\(\)]*\))*))?\)"
-        raw_acts = re.findall(pattern, clean_text)
+        ## This regex looks for: (Instruction ARGS)
+        ## It handles nested parentheses by looking for the outermost pairs
+        #pattern = r"\((\w+)(?:\s+((?:[^\(\)]|\([^\(\)]*\))*))?\)"
+        #raw_acts = re.findall(pattern, clean_text)
         
-        for inst, args in raw_acts:
-            inst = inst.upper()
-            args = args.strip()
-            
-            # Handle the specific case of (parallel) -> which is a marker, not an act
-            if inst == "PARALLEL":
-                continue
-                
-            acts.append({"inst": inst, "args": args})
-            
+        #for inst, args in raw_acts:
+        #    inst = inst.upper()
+        #    args = args.strip()
+        #    print(f"DEBUG PARSER: Found {inst} with args {args}")
+        #    
+        #    # Handle the specific case of (parallel) -> which is a marker, not an act
+        #    if inst == "PARALLEL":
+        #        continue
+        #        
+        #    acts.append({"inst": inst, "args": args})
+        # 2. Balanced Parentheses Scanner
+        stack = 0
+        start_idx = -1
+        
+        for i, char in enumerate(clean_text):
+            if char == '(':
+                if stack == 0:
+                    start_idx = i
+                stack += 1
+            elif char == ')':
+                stack -= 1
+                if stack == 0 and start_idx != -1:
+                    # We found a complete outermost block: (INST ARGS)
+                    content = clean_text[start_idx + 1:i].strip()
+                    
+                    # Split content into Instruction and Args
+                    # This splits only on the first whitespace found
+                    parts = content.split(None, 1)
+                    inst = parts[0].upper()
+                    args = parts[1] if len(parts) > 1 else ""
+                    
+                    if inst != "PARALLEL":
+                        acts.append({"inst": inst, "args": args})
+                    
+                    start_idx = -1
         return acts
+            
 
 # --- 3. LOGIC ENGINE ---
 class LogicEngine:
@@ -504,7 +530,11 @@ class LogicEngine:
         if val_str.upper().startswith('K'):
             try:
                 # Strip the K and convert the rest to int
-                return int(val_str[1:])
+                k_val = val_str[1:]
+                if k_val.isdigit(): 
+                    return int(k_val)
+                else: 
+                    return self.mem.read(k_val)
             except ValueError:
                 # Fallback: if it's something like KDS1, read the register
                 return self.mem.read(val_str[1:])
@@ -571,7 +601,7 @@ class LogicEngine:
                 calc_expr = re.sub(r'LSH\((.*?), (.*?)\)', r'((\1) << (\2))', calc_expr)
 
                 # 3. # Translate CLICK MOD to Python %
-                calc_expr = re.sub(r'\bMOD\b', '%', calc_expr, flags=re.IGNORECASE)
+                calc_expr = re.sub(r'MOD', '%', calc_expr, flags=re.IGNORECASE)
 
                 # 4. Resolve Register Tokens (DS1, SD24, etc.)
                 # We sort keys by length descending so DS10 isn't partially replaced by DS1
@@ -595,10 +625,10 @@ class LogicEngine:
                     self.mem.write(target, result)
                     
                     # Step Mode Diagnostic
-                    self.mem.append_display(f"[MATH] {target} = {result} (Source: {expr.strip()})")
+                    self.mem.append_display(f"[MATH] {target} = {result} (Source: {calc_expr.strip()})")
                         
                 except Exception as e:
-                    logger.error(f"MATH Error: {target} = {expr} (Evaluated: {calc_expr}) -> {e}")
+                    self.mem.append_display(f"MATH Error: {target} = {expr} (Evaluated: {calc_expr}) -> {e}")
             else:
                 logger.error(f"MATH Error: {target} = {expr} Missing =")
         elif cond_passed and inst == "SET": 

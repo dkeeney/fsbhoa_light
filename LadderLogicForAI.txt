@@ -155,8 +155,8 @@ Rung 22:   [Always] -> (MATH DS80 = (DS3-1)/8+1)
 Rung 23:   [Always] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
 Rung 24:   [Always] -> (COPY DS82 -> DH82)
 Rung 25:   [Always] -> (COPY 1h  -> DH81)
-Rung 26:   [Always] -> (MATH DH83 = LSH(DH81, DH82)  // ON bit mask
-Rung 27:   [Always] -> (MATH DH84 = LSH(DH83, 1h)    // OFF bit mask
+Rung 26:   [Always] -> (MATH DH83 = LSH(DH81, DH82))  // ON bit mask
+Rung 27:   [Always] -> (MATH DH84 = LSH(DH83, 1h))    // OFF bit mask
 Rung 28:   [Always] -> (COPY DH83 -> DS83)
 Rung 29:   [Always] -> (COPY DH84 -> DS84)
 // NOTE: technically, we could use DH83 and DH84 below rather than DS83 and DS84.
@@ -181,14 +181,14 @@ Rung 31:   [NOT C1005] [NOT C1009] [C1010] -> (SET C1005)           // Set Busy
                                 (parallel) -> (COPY DS84 -> YD[DS80]) // Pulse OFF
 
 //  100ms Pulse Timer
-Rung 32:   [C1005] -> (TMR T1 K2) 200ms
+Rung 32:   [C1005] -> (TMR T1 200) // 200ms
 
 //  Stop Pulse, Start Post-Pulse Delay
 Rung 33:   [T1] -> (COPY 0 -> YD[DS80]) // Stop Pulse
              (parallel) -> (SET C1008)
 
 //  100ms Post-Pulse Delay Timer
-Rung 34:   [C1008] -> (TMR T2 K2)  200ms
+Rung 34:   [C1008] -> (TMR T2 200)  // 200ms
 
 //  Clean up Timers and Busy Flag
 Rung 35:   [T2] -> (RST C1005)
