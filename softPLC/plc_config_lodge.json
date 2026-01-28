@@ -10,9 +10,11 @@
     "C153": true,
     "C154_stub": false
   },
-  "retentive": {
-    "DS": [100, 1200]
-  },
+  "retentive_ranges": [
+        {"start": "DS100", "end": "DS939"},
+        {"start": "DS1000", "end": "DS1023"}
+    ],
+  "persistence_file": "retentive_memory_Lodge.json",
   "logging": {
     "level": "INFO",
     "log_output_changes": true,

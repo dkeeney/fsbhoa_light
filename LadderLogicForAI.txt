@@ -1,4 +1,3 @@
-fsbhoa@access:~/fsbhoa_light$ cat LadderLogicForAI.txt
 This is a complete, AI-readable text listing of the entire ladder logic program
 (all rungs in all three program files) based on our final design.
 Save it for future reference when working with AI.
@@ -123,8 +122,6 @@ Rung 15:   [Always] -> (MATH DS50 = DS10+ 50)
 //  Dereference Request Bits
 Rung 16:   [Always] -> (COPY C[DS10] -> C1002)   // Get New Sched State (C1-C12)
 Rung 17:   [Always] -> (COPY C[DS50] -> C1003)   // Get Prev Sched State (C51-C62)
-Rung 18:   [Always] -> (COPY C[DS16] -> C1009)   // Get ReqON
-Rung 19:   [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 
 // == Schedule Transition Check (next two Rungs) ==
 // Generate ON Request (on Schedule OFF-to-ON transition)
@@ -139,10 +136,10 @@ Rung 19:   [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 // are changed, or to cancel all manual overrides.
 //
 //  "ON" Request Logic  (schedule transition ON to OFF)
-Rung 20: [[NOT C1005] [CMP DS10 > 0] [C1002]] [OR [NOT C1003] [C152]] [NOT T2]  (COPY SC1 -> C[DS16])
+Rung 18: [NOT C1005] [CMP DS10 > 0] [C1002] [OR [NOT C1003] [C152]] [NOT T2] --> (COPY SC1 -> C[DS16])
 
 //  "OFF" Request Logic  (schedule transition OFF to ON)
-Rung 21: [NOT C1005]  [CMP DS10 > 0]  [NOT C1002] [OR [C1003] [C152]] [NOT T2]--(COPY SC1 -> C[DS17])
+Rung 19: [NOT C1005]  [CMP DS10 > 0]  [NOT C1002] [OR [C1003] [C152]] [NOT T2] --> (COPY SC1 -> C[DS17])
 
 // == Physical Output Logic ==
 // Calculate which 16-bit YD word to use (100, 200, or 300) each corresponds
@@ -151,6 +148,8 @@ Rung 21: [NOT C1005]  [CMP DS10 > 0]  [NOT C1002] [OR [C1003] [C152]] [NOT T2]--
 // drive no more than 4 relays at a time and in some cases the relay driver will
 // drive 3 relays from one output.
 
+Rung 20:   [Always] -> (COPY C[DS16] -> C1009)   // Get ReqON
+Rung 21:   [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF
 Rung 22:   [Always] -> (MATH DS80 = (DS3-1)/8+1)
 Rung 23:   [Always] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
 Rung 24:   [Always] -> (COPY DS82 -> DH82)
@@ -397,9 +396,9 @@ DS100 to DS939     - Location of Schedule configuration
            +2  OnTime -- Time span starts (HHMM)
            +3  OffTrig  -- turn off by PhotoCell or Time
            +4  OffTime -- Time span ends (HHMM) 24hr inclusive
-DS950 to DS961    - Mode for the output (0 = Non-timed, 1 = timed)
-DS1000 to DS1023  - Location of current Schedule State for each output (light).
-DS1050 to DS1073  - Location of previous Schedule State for each output (light)
+DS950 to DS961    - Off Time for timed lights
+DS1000 to DS1023  - Mapping of Schedule for each output (light).
+DS1050 to DS1073  - Mapping of previous Schedule State for each output (light)
 DH81  - temp HEX value 1 
 DH82  - temp HEX which output on the module.
 DH83  - temp HEX ON bitmask (which output to turn on)

@@ -1,4 +1,5 @@
 import re
+import os
 import asyncio
 import logging
 import json
@@ -34,42 +35,118 @@ class MemoryManager:
         self.scan_trigger = False
         self.is_paused = False
         self.logic_reset_requested = False
+        self.breakpoint_expr = ""
+        self.breakpoint_in_progress = False
+        self.syntax_errors = []
+        self.sticky_map = {}
+        self.needs_save = False
         # CLICK to Modbus Offset Map (0-based)
-        self.map = {'X': 0, 'Y': 8192, 'C': 16384, 'DS': 0, 'TD': 45056, 'SD': 0, 'DH': 0, 'YD': 8192}
+        self.map = {'X': 9000, 'Y': 8192, 'C': 16384, 'DS': 0, 'TD': 45056, 'DH': 10000, 'YD': 8192}
         # Initialize memory immediately on startup
         if config:
+            self._build_sticky_map(config)
             self.clear_volatile_memory(config)
+
+    def _build_sticky_map(self, config):
+        """Processes config once to create a high-speed lookup for retentive ranges."""
+        ranges = config.get('retentive_ranges', [])
+        self.sticky_map = {}
+        
+        for r in ranges:
+            # Extract prefix (e.g., 'DS') and start/end numbers
+            prefix = ''.join([c for c in r['start'] if c.isalpha()])
+            try:
+                start_num = int(''.join([c for c in r['start'] if c.isdigit()]))
+                end_num = int(''.join([c for c in r['end'] if c.isdigit()]))
+                
+                if prefix not in self.sticky_map:
+                    self.sticky_map[prefix] = []
+                self.sticky_map[prefix].append((start_num, end_num))
+            except ValueError:
+                logger.error(f"MEM: Invalid retentive range in config: {r}")
+        
+        logger.info(f"MEM: Sticky map initialized for: {list(self.sticky_map.keys())}")
+
 
     def clear_volatile_memory(self, config):
         """Standardizes all registers to 0 except for defined retentive ranges."""
-        retentive = config.get('retentive', {})
+        # Ensure map is current if config changed
+        self._build_sticky_map(config) 
         
-        # Expanded prefixes to cover all CLICK register types we use
+        persistence_file = config.get('persistence_file', 'retentive_memory.json')
+        MAX_CLEAR_RANGE = 2000
         prefixes = ['C', 'DS', 'DH', 'Y', 'T', 'CT']
-        
+
         for prefix in prefixes:
-            # Resolve the first address to get m_type and base_addr
             m_type, base_addr = self._resolve_label(f"{prefix}1")
-            
-            for i in range(1000):
-                addr = base_addr + i
-                reg_num = i + 1  # 1-based index (e.g., DS1, DS2...)
+            if m_type is None:
+                continue
+
+            for i in range(MAX_CLEAR_RANGE):
+                reg_num = i + 1
+                label = f"{prefix}{reg_num}"
                 
-                # Logic check: Should this specific register stay?
-                is_sticky = False
-                if prefix in retentive:
-                    start, end = retentive[prefix]
-                    if start <= reg_num <= end:
-                        is_sticky = True
-
-                if not is_sticky:
-                    # Explicitly write a 0 to ensure it's an integer, not None
-
+                # Use the class helper
+                if not self._is_retentive(f"{prefix}{reg_num}"):
+                    addr = base_addr + i
                     self.context[self.slave_id].setValues(m_type, addr, [0])
-        
-        # Reset System Flags
+
+        # Fill the holes with the saved data
+        self.load_from_disk(persistence_file)
         self.first_scan_done = False
-        logger.info("Cold Reboot: Non-retentive memory cleared to 0.")
+        self.needs_save = False
+
+
+
+    def load_from_disk(self, filename):
+        if os.path.exists(filename):
+            try:
+                with open(filename, 'r') as f:
+                    stored_data = json.load(f)
+                    for addr_label, val in stored_data.items():
+                        self.write(addr_label, val)
+                logger.info(f"Persistence: Loaded {len(stored_data)} registers from {filename}")
+            except Exception as e:
+                logger.error(f"Persistence: Load failed: {e}")
+        self.needs_save = False
+
+    def _is_retentive(self, label):
+        """High-speed check using the class-level sticky_map."""
+        prefix = ''.join([c for c in label if c.isalpha()])
+        try:
+            num = int(''.join([c for c in label if c.isdigit()]))
+        except (ValueError, IndexError):
+            return False
+
+        if prefix in self.sticky_map:
+            for start, end in self.sticky_map[prefix]:
+                if start <= num <= end:
+                    return True
+        return False
+
+    def save_to_disk(self, config):
+        ranges = config.get('retentive_ranges', [])
+        filename = config.get('persistence_file', 'retentive_memory.json')
+        data_to_save = {}
+
+        for r in ranges:
+            # Extract prefix and numeric range
+            prefix = ''.join([c for c in r['start'] if c.isalpha()])
+            start_num = int(''.join([c for c in r['start'] if c.isdigit()]))
+            end_num = int(''.join([c for c in r['end'] if c.isdigit()]))
+        
+            for i in range(start_num, end_num + 1):
+                addr_label = f"{prefix}{i}"
+                # Read current value and store in the dictionary
+                data_to_save[addr_label] = self.read(addr_label)
+
+        try:
+            with open(filename, 'w') as f:
+                json.dump(data_to_save, f, indent=4)
+            logger.info(f"Persistence: Successfully saved {len(data_to_save)} registers to {filename}")
+        except Exception as e:
+            logger.error(f"Persistence: Save failed: {e}")
+
 
     def _resolve_label(self, label):
         match = re.match(r"([A-Z]+)(\d+)", label)
@@ -105,6 +182,14 @@ class MemoryManager:
         return bool(val) if m_type == 1 else val
 
     def write(self, label, value):
+        # --- Type Safety Check ---
+        # Allow only ints, floats (which we'll cast), and bools
+        if not isinstance(value, (int, float, bool)):
+            err_msg = f"MEM CRITICAL: Attempted to write invalid type {type(value)} to {label} (Value: {value})"
+            logger.error(err_msg)
+            self.add_error(err_msg)
+            return # Block the write
+
         if label.startswith('YD'):
             # Log the 16-bit pattern for your SSH window
             logger.info(f"*** WORD OUTPUT: {label} = {bin(value)} (Hex: {hex(value)})")
@@ -119,6 +204,9 @@ class MemoryManager:
             m_type, addr = self._resolve_label(label)
             if m_type:
                 self.context[self.slave_id].setValues(m_type, addr, [int(value)])
+        # Check if this address is in our 'sticky' list
+        if self._is_retentive(label):
+            self.needs_save = True
 
     def resolve_deref(self, arg):
         # Strict rule: only resolve if brackets exist
@@ -142,11 +230,21 @@ class MemoryManager:
         """Appends a line of diagnostic text to the current last_rung display."""
         if self.step_mode:
             # We use a non-breaking space and a cyan color to make assignments pop
-            self.last_rung += f"<br>&nbsp;&nbsp;{self.rung_id} <span style='color:#00ffff'>» {text}</span>"
-            logger.info(f"{self.rung_id} {text}")
+            self.last_rung += f"<br>&nbsp;&nbsp;Rung {self.rung_id} <span style='color:#00ffff'>» {text}</span>"
+            logger.info(f"Rung {self.rung_id} {text}")
+
+    def add_error(self, msg):
+        if msg not in self.syntax_errors:
+            self.syntax_errors.append(msg)
+
+    def clear_errors(self):
+        self.syntax_errors = []
 
 # --- 2. CLICK PARSER ---
 class CLICKParser:
+    def __init__(self, mem=None):
+        self.mem = mem  # Now the parser can "speak" to the dashboard
+
     # Updated Parser logic to strip comments first
     def parse(self, filename):
         programs = {"MAIN": []}
@@ -204,40 +302,86 @@ class CLICKParser:
                 # Store the parsed data for execution
                 programs[block].append({
                     "id": int(rid),
-                    "conds": self._parse_recursive_conds(c_part),
+                    "conds": self._parse_conds(c_part),
                     "acts": self._parse_acts(a_part)
                 })
                 
                 # Store the original text for the Dashboard diagnostic
                 programs["__raw__"][block].append(text)
-
-    def _parse_recursive_conds(self, text):
-        results = []
-        # Find top-level bracketed groups: looks for [WORD  ...] 
-        # but handles cases where brackets are adjacent
-        tokens = re.findall(r"\[([^\[\]]+|\[[^\[\]]+\])\]", text)
-        
-        for t in tokens:
-            t = t.strip()
-            if t.startswith("OR "):
-                # Recursive call for content after "OR "
-                sub = self._parse_recursive_conds(t[3:])
-                results.append({"type": "OR", "val": sub})
-            elif t.startswith("AND "):
-                sub = self._parse_recursive_conds(t[4:])
-                results.append({"type": "AND", "val": sub})
-            elif t.startswith("NOT "):
-                results.append({"type": "NOT", "val": t[4:].strip()})
-            elif t.startswith("CMP "):
-                results.append({"type": "CMP", "val": t[4:].strip()})
             else:
-                # Handle simple group logic: [C1 C2] -> AND group
-                if " " in t:
-                    sub_parts = [{"type": "DIRECT", "val": x} for x in t.split()]
-                    results.append({"type": "AND", "val": sub_parts})
-                else:
-                    results.append({"type": "DIRECT", "val": t})
-        return results
+                # THIS IS THE WATCHDOG
+                if text.strip():
+                    logger.error(f"PARSER FAIL: Line looks like a Rung but failed regex: '{text}'")
+                    self.mem.add_error(f"Syntax Error: {text[:30]}...")
+
+
+    def _parse_conds(self, cond_text):
+        """
+        The Slicer: Finds top-level bracketed blocks.
+        Input: "[A][OR [B][C]][D]"
+        Output: ["A", "OR [B][C]", "D"] (with brackets removed)
+        """
+        blocks = []
+        stack = 0
+        start = -1
+        
+        for i, char in enumerate(cond_text):
+            # --- STOP CHECK ---
+            # If we hit the action markers, stop looking for conditions
+            if stack == 0 and (char == '(' or char == '-'):
+                break
+
+            if char == '[':
+                if stack == 0: 
+                    start = i
+                stack += 1
+            elif char == ']':
+                stack -= 1
+                if stack == 0 and start != -1:
+                    blocks.append(cond_text[start+1:i])
+                    start = -1
+                elif stack < 0:
+                    self._report_error(f"PARSER ERROR: Stray ']' at pos {i} in: {cond_text}")
+                    stack = 0 
+            else:
+                # --- STRICT MODE CHECK ---
+                # If we aren't inside a bracket and the char isn't whitespace, it's 'naked' logic
+                if stack == 0 and not char.isspace():
+                    self._report_error(f"PARSER ERROR: Naked condition/Unexpected text '{char}' at pos {i} in: {cond_text}")
+
+        if stack > 0:
+            self._report_error(f"PARSER ERROR: Missing closing ']' in logic: {cond_text}")
+
+        # Map each block to its structured dictionary
+        return [self._parse_single_cond(b) for b in blocks]
+
+
+    def _parse_single_cond(self, text):
+        """
+        The Interpreter: Categorizes a single bracketed block based on 
+        prefix keywords. Stays strictly away from infix complexity.
+        """
+        text = text.strip()
+        
+        # 1. OR Group: [OR [A][B]]
+        if text.startswith("OR "):
+            return {"type": "OR", "val": self._parse_conds(text[3:].strip())}
+        
+        # 2. AND Group: [AND [A][B]] (for explicit sub-grouping)
+        if text.startswith("AND "):
+            return {"type": "AND", "val": self._parse_conds(text[4:].strip())}
+
+        # 3. NOT Operator: [NOT C100]
+        if text.startswith("NOT "):
+            return {"type": "NOT", "val": text[4:].strip()}
+        
+        # 4. CMP Operator: [CMP DS3 == 1]
+        if text.startswith("CMP "):
+            return {"type": "CMP", "val": text[4:].strip()}
+            
+        # 5. Base Case: DIRECT (Bit addresses like C1, DS10, YD1)
+        # If no prefix is found, it must be a standard address.
+        return {"type": "DIRECT", "val": text}
 
     def _parse_acts(self, text):
         acts = []
@@ -289,6 +433,15 @@ class CLICKParser:
                     start_idx = -1
         return acts
             
+    def _report_error(self, reason):
+        # Create a "Visual Pointer" error message
+        # e.g., "Naked text in: [C1] C2 [C3] --> ^ near 'C2'"
+        #context = full_text[max(0, pos-10):min(len(full_text), pos+10)]
+        #error_msg = f"{reason} in logic: ...{context}... (at '{full_text[pos:pos+1]}' pos {pos})"
+        
+        # This writes to the console and the Dashboard-accessible memory
+        logger.error(reason)
+        self.mem.add_error(reason)
 
 # --- 3. LOGIC ENGINE ---
 class LogicEngine:
@@ -411,6 +564,22 @@ class LogicEngine:
             if not jumped:
                 ptr += 1
 
+            # --- Checkpoint Intercept ---
+            if self.mem.breakpoint_in_progress and self.mem.breakpoint_expr:
+                # We call eval_cmp to check the condition
+                passed, trace = self.eval_cmp(self.mem.breakpoint_expr)
+    
+                # If the comparison itself failed to parse, stop immediately
+                if "Regex Fail" in trace:
+                    logger.error(f"BREAKPOINT ERROR: Invalid Syntax '{self.mem.breakpoint_expr}'")
+                    self.mem.breakpoint_in_progress = False
+                    self.mem.step_mode = True
+                elif passed:
+                    logger.info(f"!!! BREAKPOINT HIT: {trace} !!!")
+                    self.mem.breakpoint_in_progress = False
+                    self.mem.step_mode = True
+
+
     def run_scan(self, slow_mo=False):
         # Update RTC
         now = datetime.now()
@@ -441,10 +610,16 @@ class LogicEngine:
         details = []
         overall_result = True
 
+        # --- Ensure conds is always a list ---
+        if isinstance(conds, dict):
+            conds = [conds]
+
         for c in conds:
             c_type = c['type']
             label = c['val']
             success = False
+
+            #print(f"eval_conds() {c_type}")
 
             if c_type == "DIRECT":
                 success = self.mem.read(label)
@@ -461,13 +636,21 @@ class LogicEngine:
             
             elif c_type == "OR":
                 # Recursive call for the OR group
-                success, sub_details = self.eval_conds(label)
-                # Format OR group for dashboard
-                details.append(("OR GROUP", success))
-                # Add nested details indented
-                for sub_label, sub_success in sub_details:
-                    details.append((f"  + {sub_label}", sub_success))
-            
+                
+                for branch in label:
+                    # 1. Evaluate this specific branch
+                    branch_result, branch_detail = self.eval_conds(branch)
+
+                    # 2. Add to trace (indented to show it's inside an OR)
+                    # branch_detail[0][0] is the text of the condition (e.g., "NOT C1003")
+                    label_text = branch_detail[0][0] if branch_detail else "Branch"
+                    details.append((f"  ↳ OR-Branch: {label_text}", branch_result))
+                    
+                    # 3. Short-circuit logic: If TRUE, we stop evaluating this OR block
+                    if branch_result:
+                        success = True
+                        break # Stop evaluating further OR arguments
+
             elif c_type == "AND":
                 success, sub_details = self.eval_conds(label)
                 if len(sub_details) > 1:
@@ -559,11 +742,14 @@ class LogicEngine:
                 
                 def resolve_indexed(label):
                     # Check for patterns like DS[DS20]
-                    match = re.search(r'([A-Z]+)\[([A-Z]+\d+)\]', label)
+                    match = re.search(r'([A-Z]+)\s*\[\s*([A-Z]+\d+)\s*\]', label, re.IGNORECASE)
                     if match:
                         base_type, index_reg = match.groups()
                         index_val = self.mem.read(index_reg)
-                        return f"{base_type}{index_val}"
+                        resolved = f"{base_type}{index_val}"
+                        # LOUD DEBUG: See exactly what the index turns into
+                        #logger.info(f"INDEX RESOLVED: {label} -> {resolved}")
+                        return resolved
                     return label
 
                 # 1. Resolve source and destination addresses
@@ -577,7 +763,13 @@ class LogicEngine:
                 self.mem.write(actual_dest_addr, val)
                 
                 if self.mem.step_mode:
-                    self.mem.append_display(f"[COPY] {val} -> {actual_dest_addr} (Indexed: {dest_str})")
+                    s_addr = actual_src_addr
+                    d_addr = actual_dest_addr
+                    if src_str != actual_src_addr:
+                        s_addr += f" (Indexed: {src_str})"
+                    if dest_str != actual_dest_addr:
+                        d_addr += f" (Indexed: {dest_str})"
+                    self.mem.append_display(f"[COPY] {val} [{s_addr}] -> {d_addr}")
             else:
                 logger.error(f"COPY Unpack Error in {args}. Missing ->")
 
@@ -631,12 +823,34 @@ class LogicEngine:
                     self.mem.append_display(f"MATH Error: {target} = {expr} (Evaluated: {calc_expr}) -> {e}")
             else:
                 logger.error(f"MATH Error: {target} = {expr} Missing =")
-        elif cond_passed and inst == "SET": 
-            self.mem.write(args.strip(), 1)
-            self.mem.append_display(f"[SET] {args} = 1")
-        elif cond_passed and inst == "RST": 
-            self.mem.write(args.strip(), 0)
-            self.mem.append_display(f"[RST] {args} = 0")
+
+        elif cond_passed and inst in ["SET", "RST"]:
+            val = 1 if inst == "SET" else 0
+            target_raw = args.strip()
+
+            # Check if this is a range: "C1011 to C1012"
+            if " to " in target_raw.lower():
+                parts = re.split(r'\s+to\s+', target_raw, flags=re.IGNORECASE)
+                if len(parts) == 2:
+                    start_label = parts[0].strip()
+                    end_label = parts[1].strip()
+
+                    # Extract prefix and numbers
+                    prefix = ''.join([c for c in start_label if c.isalpha()])
+                    start_num = int(''.join([c for c in start_label if c.isdigit()]))
+                    end_num = int(''.join([c for c in end_label if c.isdigit()]))
+
+                    for i in range(start_num, end_num + 1):
+                        self.mem.write(f"{prefix}{i}", val)
+                    
+                    if self.mem.step_mode:
+                        self.mem.append_display(f"[{inst} RANGE] {prefix}{start_num}-{end_num} = {val}")
+            else:
+                # Standard single-bit logic
+                self.mem.write(target_raw, val)
+                if self.mem.step_mode:
+                    self.mem.append_display(f"[{inst}] {target_raw} = {val}")
+
         elif inst == "OUT": 
             val = 1 if cond_passed else 0
             self.mem.write(args.strip(), val)
@@ -689,153 +903,250 @@ DASHBOARD_HTML = """
 <head>
     <title>{{ config.name }} Dashboard</title>
     <script>
-        // Only refresh every 2 seconds if NOT in Step Mode
         var isStepMode = {{ 'true' if mem.step_mode else 'false' }};
-        console.log("PLC Mode initialized as: " + (isStepMode ? "STEP" : "RUN"));
-
         if (!isStepMode) {
-            console.log("Auto-refresh started (2s interval)");
-            setInterval(function(){
-                location.reload();
-            }, 2000);
+            setInterval(function(){ location.reload(); }, 2000);
         }
-        // Clean up the URL so 'Next' doesn't stay in the address bar
-        if (window.location.pathname !== '/') {
-            window.history.replaceState({}, '', '/');
-        }
+        if (window.location.pathname !== '/') { window.history.replaceState({}, '', '/'); }
     </script>
     <style>
-        body { font-family: 'Courier New', monospace; background: #0d0d0d; color: #00ff41; padding: 20px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin-bottom: 20px;}
-        .box { border: 1px solid #00ff41; padding: 15px; background: #1a1a1a; text-align: center; }
-        .on { background: #00ff41; color: #000; font-weight: bold; }
-        .btn { background: #00ff41; color: #000; border: none; padding: 10px 20px; cursor: pointer; font-family: inherit; font-weight: bold; }
-        .label { font-size: 0.8em; display: block; color: #888; margin-bottom: 5px; }
-        h2 { border-bottom: 2px solid #00ff41; padding-bottom: 5px; margin-top: 30px; }
+        body { font-family: 'Courier New', monospace; background: #0d0d0d; color: #00ff41; padding: 20px; line-height: 1.4; }
+        h1 { color: #ffca00; border-bottom: 3px double #00ff41; padding-bottom: 10px; margin-bottom: 20px; }
+        
+        .panel { background: #1a1a1a; border: 1px solid #333; padding: 15px; margin-bottom: 25px; }
+        .panel h3 { margin-top: 0; color: #ffca00; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 5px; margin-bottom: 15px; font-size: 1em; }
+        
+        .btn { background: #00ff41; color: #000; border: none; padding: 8px 15px; cursor: pointer; font-family: inherit; font-weight: bold; }
+        .btn-small { background: #00ff41; color: #000; border: none; padding: 4px 10px; cursor: pointer; font-size: 0.8em; font-weight: bold; }
+        
+        .light-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+        
+        .bulb { width: 20px; height: 20px; border-radius: 50%; background: #222; border: 2px solid #333; }
+        .bulb.on { background: #ffca00; box-shadow: 0 0 15px #ffca00; border-color: #fff; }
+        
+        .indicator { width: 10px; height: 10px; border-radius: 50%; background: #333; }
+        .indicator.on { background: #00ff41; box-shadow: 0 0 8px #00ff41; }
+        .indicator.prev-on { background: #00bfff; box-shadow: 0 0 8px #00bfff; }
+        
+        input { background: #000; border: 1px solid #00ff41; color: #00ff41; padding: 5px; font-family: inherit; }
+        .label { font-size: 0.75em; color: #888; }
+        
+        /* Logic Trace Styling */
+        .trace-container { font-family: monospace; margin-top: 15px; padding: 15px; background: #000; border: 1px solid #444; }
+        .trace-line { display: block; margin-bottom: 4px; border-left: 2px solid #333; padding-left: 10px; }
+        .trace-success { color: #00ff41; }
+        .trace-fail { color: #ff4500; }
+        
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px; border: 1px solid #333; text-align: center; }
+        
+        .toggle-btn { padding: 6px 12px; background: #222; border: 1px solid #444; color: #888; cursor: pointer; }
+        .toggle-btn.on { border-color: #00ff41; color: #00ff41; }
 
-        .btn-small { background: #00ff41; color: #000; border: none; padding: 2px 8px; cursor: pointer; font-size: 0.8em; font-weight: bold; }
-        input { background: #1a1a1a; border: 1px solid #00ff41; color: #00ff41; padding: 2px; font-family: inherit; }
+        .error-box {
+            background: #330000;
+            border: 2px solid #ff4500;
+            color: #ffca00;
+            padding: 15px;
+            margin-bottom: 20px;
+            font-family: monospace;
+            transition: background 0.2s;
+        }
+        .error-box:hover {
+            background: #4a0000;
+        }
+        .dismiss-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: #ff4500;
+            color: #fff;
+            border: none;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <h1>{{ config.name }} INTERACTIVE VIEW</h1>
-    <div style="margin-bottom: 20px;">
-        <form action="/toggle_speed" method="post" style="display:inline;">
-            <button type="submit" class="btn">
-                TOGGLE: {{ 'SWITCH TO 50ms' if mem.slow_mo_active else 'SWITCH TO SLOW-MO (1s)' }}
-            </button>
+
+    {% if mem.syntax_errors %}
+    <div class="error-box">
+        <form action="/clear_errors" method="post" style="margin: 0;">
+            <button type="submit" class="dismiss-btn" title="Dismiss">X</button>
         </form>
-        <span style="margin-left: 20px;">Current Mode: <b>{{ 'SLOW-MOTION (Trace On)' if mem.slow_mo_active else 'REAL-TIME' }}</b></span>
+        <h3 style="margin: 0 0 10px 0; color: #ff4500;">⚠️ LOGIC PARSE ERRORS</h3>
+        <div style="user-select: text;"> {% for error in mem.syntax_errors %}
+                <div style="margin-bottom: 5px;">• {{ error }}</div>
+            {% endfor %}
+        </div>
     </div>
-    <div style="background: #222; padding: 15px; border: 1px dashed #00ff41; margin-bottom: 20px;">
-        <div style="margin-bottom: 10px;">
-            <form action="/toggle_step" method="post" style="display:inline;">
-                <button type="submit" class="btn">{{ 'EXIT STEP MODE' if mem.step_mode else 'ENTER STEP MODE' }}</button>
+    {% endif %}
+
+    <div class="panel" style="border-left: 5px solid #00ff41;">
+        <div style="display: flex; gap: 20px; align-items: center; margin-bottom: 15px;">
+             <form action="/toggle_speed" method="post">
+                <button type="submit" class="btn">
+                    {{ 'FAST MODE (50ms)' if mem.slow_mo_active else 'SLOW-MO MODE (1s)' }}
+                </button>
             </form>
+            <span>Mode: <b>{{ 'DEBUG SLOW-MO' if mem.slow_mo_active else 'REAL-TIME' }}</b></span>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; background: #000; padding: 10px; border: 1px solid #444;">
+            <form action="/toggle_step" method="post"><button type="submit" class="btn">{{ 'EXIT STEP MODE' if mem.step_mode else 'ENTER STEP MODE' }}</button></form>
+            
             {% if mem.step_mode %}
-            <form action="/step" method="post" style="display:inline; margin-left: 10px;">
-                <button type="submit" class="btn" style="background: #ff00ff;">NEXT STEP</button>
-            </form>
-            <form action="/next_scan" method="post" style="display:inline; margin-left: 10px;">
-                <button type="submit" class="btn" style="background: #00bfff;">NEXT SCAN</button>
-            </form>
-            <form action="/reset_cycle" method="post" style="display:inline; margin-left: 10px;">
-                <button type="submit" class="btn" style="background: #ff4500;">RESET CYCLE</button>
-            </form>
+                <form action="/step" method="post"><button type="submit" class="btn" style="background: #ff00ff;">STEP</button></form>
+                <form action="/next_scan" method="post"><button type="submit" class="btn" style="background: #00bfff;">SCAN</button></form>
+                
+                <form action="/set_checkpoint" method="post" style="display: flex; align-items: center; gap: 5px; border-left: 1px solid #333; padding-left: 10px;">
+                    <span class="label">RUN TO:</span>
+                    <input type="text" name="expr" value="{{ mem.breakpoint_expr }}" style="width: 100px;">
+                    <button type="submit" class="btn-small" style="background: {{ '#ff00ff' if mem.breakpoint_in_progress else '#00ff41' }};">
+                        {{ 'RUNNING...' if mem.breakpoint_in_progress else 'GO' }}
+                    </button>
+                </form>
+
+                <div style="border-left: 1px solid #333; padding-left: 10px; display: flex; align-items: center; gap: 5px;">
+                    <span class="label">EDIT:</span>
+                    <form action="/edit_reg" method="post" style="display: flex; gap: 5px;">
+                        <input type="text" name="reg" placeholder="Reg" style="width:50px;">
+                        <input type="text" name="val" placeholder="Val" style="width:50px;">
+                        <button type="submit" class="btn-small">SET</button>
+                    </form>
+                </div>
+
+                <form action="/reset_cycle" method="post">
+                    <button type="submit" class="btn" style="background: #ff4500;">REBOOT</button>
+                </form>
+                <form action="/manual_save" method="post">
+                    <button type="submit" class="btn" style="background: #ffca00; color: #000;">SAVE RETENTION</button>
+                </form>
             {% endif %}
         </div>
 
-        <div style="font-family: monospace; font-size: 0.9em; white-space: pre-wrap;">
-            <div style="color: #ffca00; margin-bottom: 5px;">LAST: {{ mem.last_rung | safe }}</div>
-            <div style="color: #00bfff;">NEXT: {{ mem.next_rung }}</div>
+        <div class="trace-container">
+            <div style="color: #ffca00; font-weight: bold; margin-bottom: 5px;">
+                LAST: {{ mem.last_rung | safe }}
+            </div>
+            
+            <div style="margin-left: 25px; border-left: 1px solid #333; padding-left: 10px;">
+                {% if mem.last_details %}
+                    {% for detail in mem.last_details %}
+                        <div class="trace-line {{ 'trace-success' if detail[1] else 'trace-fail' }}" style="margin-top: 2px;">
+                            <br><span style="color: #444;">↳</span> 
+                            <b>{{ '✓' if detail[1] else '✗' }}</b> {{ detail[0] }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <div style="color: #00bfff; margin-top: 15px; border-top: 1px solid #222; padding-top: 10px; font-size: 0.85em;">
+                NEXT: {{ mem.next_rung }}
+            </div>
         </div>
-        
-        {% if mem.step_mode %}
-        <div style="margin-top: 15px; border-top: 1px solid #444; pt-10px;">
-            <span class="label">EDIT REGISTER (e.g., DS3):</span>
-            <form action="/edit_reg" method="post" style="display:inline;">
-                <input type="text" name="reg" placeholder="Label" style="width:60px;">
-                <input type="number" name="val" placeholder="Value" style="width:60px;">
-                <button type="submit" class="btn-small">SET</button>
+
+    <div class="panel">
+        <h3>System Registers & Control Bits</h3>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+            {% for b in ['T1', 'T2', 'C151', 'C152', 'C153', 'C154', 'C1002', 'C1003', 'C1005', 'C1008', 'C1009', 'C1010'] %}
+            <form action="/toggle_bit/{{b}}" method="post">
+                <button type="submit" class="toggle-btn {{ 'on' if mem.read(b) else 'off' }}">{{ b }}</button>
             </form>
+            {% endfor %}
         </div>
-        {% endif %}
-    </div>
-    
-    <h2>Control Bits (C)</h2>
-    <div class="grid">
-        {% for i in range(1, 13) %}
-        <div class="box {{ 'on' if mem.read('C'~i) }}">
-            <span class="label">Sched {{i}}</span> C{{i}}
-        </div>
-        {% endfor %}
-        <div class="box {{ 'on' if mem.read('C154') }}">
-            <span class="label">Photocell</span> C154
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">
+            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Sequencer</span>DS3: {{ mem.read('DS3') }}</div>
+            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">OnReq ptr</span>DS16: {{ mem.read('DS16') }}</div>
+            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">OffReq ptr</span>SD17: {{ mem.read('SD17') }}</div>
+            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Day Mask</span>DH49: {{ "0x%02X" | format(mem.read('DH49')) }}</div>
+            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Span Idx</span>DS2: {{ mem.read('DS2') }}</div>
+            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Base Ptr</span>DS21: {{ mem.read('DS21') }}</div>
         </div>
     </div>
-    <h2>Light Output Status (C101-C124)</h2>
-    <div class="grid">
-        {% for i in range(101, 125) %}
-        <div class="box {{ 'on' if mem.read('C'~i) }}">
-            <span class="label">Light {{i-100}}</span> C{{i}}
+    <div class="panel">
+        <h3>Light Status  (C101-C124), Map (DS1000) ONRequest (C201-C224) OFFRequest (C251-264)</h3>
+        <div class="light-grid">
+            {% for i in range(1, 25) %}
+            {% set c_addr = 101 + (i-1) %}
+            {% set ds_curr = 1000 + (i-1) %}
+            {% set ds_reqON = 200 + (i) %}
+            {% set ds_reqOFF = 250 + (i) %}
+            <div style="border: 1px solid #333; padding: 10px; background: #0a0a0a;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.7em; color: #666; margin-bottom: 5px;">
+                    <span>#{{ i }}</span><span>C{{ c_addr }}</span>
+                </div>
+                <div style="display: flex; justify-content: center; margin-bottom: 10px;">
+                    <div class="bulb {{ 'on' if mem.read('C' + (c_addr|string)) else 'off' }}"></div>
+                </div>
+                <div style="font-size: 0.7em; border-top: 1px solid #222; padding-top: 5px;">
+                    <div style="color: #00ff41;">MAP: <nbsp> {{ mem.read('DS' + (ds_curr|string)) }}</div>
+                    <div style="color: #00bfff;">ReqON: <nbsp>{{ mem.read('DS' + (ds_reqON|string)) }}</div>
+                    <div style="color: #00bfff;">ReqOFF: {{ mem.read('DS' + (ds_reqOFF|string)) }}</div>
+                </div>
+            </div>
+            {% endfor %}
         </div>
-        {% endfor %}
     </div>
 
-    <h2>Sequencer & Time</h2>
-    <div class="grid">
-        <div class="box"><span class="label">Sequencer</span> DS3: {{ mem.read('DS3') }}</div>
-        <div class="box"><span class="label">PLC HHMM</span> DS30: {{ mem.read('DS30') }}</div>
-        <div class="box"><span class="label">Day (Sun=1)</span> SD23: {{ mem.read('SD23') }}</div>
-    </div>
-    <h2>Internal Pointers & States</h2>
-    <div class="grid">
-        <div class="box"><span class="label">Sched Index (DS4)</span>{{ mem.read('DS4') }}</div>
-        <div class="box"><span class="label">Span Index (DS2)</span>{{ mem.read('DS2') }}</div>
-        <div class="box"><span class="label">Base Ptr (DS21)</span>{{ mem.read('DS21') }}</div>
-        <div class="box"><span class="label">Day Mask (DH49)</span>{{ hex(mem.read('DH49')) }}</div>
-    </div>
-    <h2>Schedule Data (DS100-DS939)</h2>
-    <div style="overflow-y: auto; max-height: 300px; background: #1a1a1a; border: 1px solid #444; padding: 10px;">
-        <table style="width: 100%; border-collapse: collapse; font-size: 0.8em;">
-            <thead style="position: sticky; top: 0; background: #000; color: #888;">
-                <tr style="border-bottom: 1px solid #00ff41;">
-                    <th style="text-align: left;">Sched/Span</th>
-                    <th>Days (DS+0)</th>
-                    <th>OnTrig (DS+1)</th>
-                    <th>OnTime (DS+2)</th>
-                    <th>OffTrig (DS+3)</th>
-                    <th>OffTime (DS+4)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for s in range(1, 13) %}
-                    {% for p in range(0, 14) %}
-                        {% set base = (s-1)*70 + p*5 + 100 %}
-                        {# We show the row if any of the span data is non-zero #}
-                        {% if mem.read('DS'~base) or mem.read('DS'~(base+2)) or mem.read('DS'~(base+4)) %}
-                        <tr style="border-bottom: 1px solid #333;">
-                            <td style="color: #ffca00;">S{{s}} P{{p}}</td>
-                            <td style="text-align: center;">{{ hex(mem.read('DS'~base)) }}</td>
-                            <td style="text-align: center;">{{ mem.read('DS'~(base+1)) }}</td>
-                            <td style="text-align: center; color: #00bfff;">{{ mem.read('DS'~(base+2)) }}</td>
-                            <td style="text-align: center;">{{ mem.read('DS'~(base+3)) }}</td>
-                            <td style="text-align: center; color: #ff4500;">{{ mem.read('DS'~(base+4)) }}</td>
-                        </tr>
-                        {% endif %}
-                    {% endfor %}
-                {% endfor %}
-            </tbody>
-        </table>
-        {% if not any_data_found %}
-            <div style="color: #ff4500; text-align: center; padding: 20px;">
-                *** NO SCHEDULE DATA DETECTED (DS100-DS939 ARE ALL ZERO) ***
+    <div class="panel">
+        <h3>Schedule States (Current C1-C14 vs Previous C51-C64)</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 10px;">
+            {% for i in range(1, 14) %}
+            <div style="border: 1px solid #333; padding: 5px; text-align: center;">
+                <div class="label">SCH {{ i }}</div>
+                <div style="display: flex; justify-content: center; gap: 8px;">
+                    <div class="indicator {{ 'on' if mem.read('C'+(i|string)) else 'off' }}" title="Current"></div>
+                    <div class="indicator {{ 'prev-on' if mem.read('C'+((i+50)|string)) else 'off' }}" title="Previous"></div>
+                </div>
             </div>
-        {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+
+
+    <div class="panel">
+        <h3>Active Schedule Data</h3>
+        <div style="max-height: 400px; overflow-y: auto;">
+            <table>
+                <thead style="position: sticky; top: 0; background: #000;">
+                    <tr>
+                        <th>Sched/Span</th>
+                        <th>Days (DS+0)</th>
+                        <th>OnTrig (DS+1)</th>
+                        <th>OnTime (DS+2)</th>
+                        <th>OffTrig (DS+3)</th>
+                        <th>OffTime (DS+4)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% set ns = namespace(found=false) %}
+                    {% for s in range(1, 13) %}
+                        {% for p in range(0, 14) %}
+                            {% set base = (s-1)*70 + p*5 + 100 %}
+                            {% if mem.read('DS'~base) or mem.read('DS'~(base+2)) or mem.read('DS'~(base+4)) %}
+                                {% set ns.found = true %}
+                                <tr>
+                                    <td style="color: #ffca00;">S{{s}} P{{p}}</td>
+                                    <td>{{ "0x%02X" | format(mem.read('DS'~base)) }}</td>
+                                    <td>{{ mem.read('DS'~(base+1)) }}</td>
+                                    <td style="color: #00bfff;">{{ mem.read('DS'~(base+2)) }}</td>
+                                    <td>{{ mem.read('DS'~(base+3)) }}</td>
+                                    <td style="color: #ff4500;">{{ mem.read('DS'~(base+4)) }}</td>
+                                </tr>
+                            {% endif %}
+                        {% endfor %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 </body>
 </html>
 """
+
 
 @app.route('/')
 def index():
@@ -850,6 +1161,7 @@ def toggle_speed():
 def toggle_step():
     # 1.  flip the mode!
     shared_mem.step_mode = not shared_mem.step_mode
+    shared_mem.breakpoint_in_progress = False
 
     # 2. If we are LEAVING step mode, nudge the engine to break the 'while' loop
     if not shared_mem.step_mode:
@@ -877,6 +1189,7 @@ def next_scan():
 def reset_cycle():
     # 1. Clear volatile memory based on config ranges
     shared_mem.clear_volatile_memory(shared_config)
+    shared_mem.clear_errors()
     
     # 2. Re-apply essential startup values
     shared_mem.first_scan_done = False 
@@ -891,11 +1204,58 @@ def reset_cycle():
 @app.route('/edit_reg', methods=['POST'])
 def edit_reg():
     reg = request.form.get('reg').upper()
-    val = int(request.form.get('val'))
-    shared_mem.write(reg, val)
+    raw_val = request.form.get('val')
+    val = 0;
+    if not reg:
+        logger.warning("UI: Edit attempted with no register label.")
+        return redirect('/')
+    try:
+        # 2. Handle empty or non-numeric values gracefully
+        # If the string is empty, we'll treat it as 0. 
+        # If it's hex (like 0x10) or int, this logic handles it.
+        if not raw_val:
+            val = 0
+        elif raw_val.lower().startswith('0x'):
+            val = int(raw_val, 16)
+        else:
+            # We use float then int to handle cases where users might type '1.0'
+            val = int(float(raw_val))
+
+        # 3. Perform the write
+        shared_mem.write(reg, val)
+        logger.info(f"UI: Manually set {reg} = {val}")
+
+    except ValueError:
+        logger.error(f"UI: Invalid value entered for {reg}: '{raw_val}'")
+        # Optional: You could pass an error message back to the UI here
     return redirect('/')
 
+@app.route('/set_checkpoint', methods=['POST'])
+def set_checkpoint():
+    expr = request.form.get('expr').strip()
+    if expr:
+        # 1. Store the expression
+        shared_mem.breakpoint_expr = expr
+        
+        # 2. Syntax Check: Try to parse it once before committing
+        # We use a dummy check just to see if the regex matches
+        match = re.search(r"([A-Z0-9\[\]]+)\s*([><=!]+)\s*([A-Z0-9]+)", expr)
+        if not match:
+            # You could add a flash message here if using Flask sessions, 
+            # for now, we'll just log it and not start the run.
+            logger.error(f"UI: Rejected invalid breakpoint syntax: {expr}")
+            return redirect('/')
 
+        # 3. Start the run
+        shared_mem.breakpoint_in_progress = True
+        shared_mem.step_mode = False  # Set to run full speed
+        shared_mem.step_trigger = True # Release current pause
+    return redirect('/')
+
+@app.route('/clear_errors', methods=['POST'])
+def clear_errors():
+    shared_mem.clear_errors()
+    return redirect('/')
 
 def wait_and_render(timeout=2.0):
     """Blocks the Flask thread until the Logic Engine reports is_paused=True,
@@ -913,6 +1273,10 @@ def wait_and_render(timeout=2.0):
     # and the Memory Map is stable for sampling.
     return render_template_string(DASHBOARD_HTML, mem=shared_mem, config=shared_config, hex=hex)
 
+@app.route('/manual_save', methods=['POST'])
+def manual_save():
+    shared_mem.save_to_disk(shared_config)
+    return redirect('/')
 
 
 
@@ -943,27 +1307,32 @@ def start_modbus_thread(context,  config):
     ))
 
 
-def run_loop(mem, engine):
+def run_loop(mem, engine, config):
     logger.info("Logic Engine Started.")
     while True:
-            try:
-                # If in step mode, slow down the check to save CPU
-                sleep_time = 0.5 if mem.step_mode else 0.05
+        try:
+            # If in step mode, slow down the check to save CPU
+            sleep_time = 0.5 if mem.step_mode else 0.05
                 
-                # This executes MAIN and any CALLs
-                engine.run_scan(slow_mo=mem.slow_mo_active)
+            # This executes MAIN and any CALLs
+            engine.run_scan(slow_mo=mem.slow_mo_active)
                 
-                time.sleep(sleep_time)
+            time.sleep(sleep_time)
+
+            if mem.needs_save:
+                mem.save_to_disk(config)
+                mem.needs_save = False # Reset the flag
+
                 
-            except LogicResetException:
-                # This is where we land after 'raise LogicResetException()'
-                logger.info("!!! Logic RESET Caught: Rewinding to MAIN !!!")
-                mem.logic_reset_requested = False
-                continue 
-            except Exception as e:
-                fault = getattr(mem, 'next_rung', 'Unknown')
-                logger.error(f"Logic Loop Error at {fault}: {e}")
-                time.sleep(1)
+        except LogicResetException:
+            # This is where we land after 'raise LogicResetException()'
+            logger.info("!!! Logic RESET Caught: Rewinding to MAIN !!!")
+            mem.logic_reset_requested = False
+            continue 
+        except Exception as e:
+            fault = getattr(mem, 'next_rung', 'Unknown')
+            logger.error(f"Logic Loop Error at {fault}: {e}")
+            time.sleep(1)
 
 
 
@@ -984,11 +1353,11 @@ def run_plc():
     
 
     # Apply initial state from config
-    mem = MemoryManager(context, config['slave_id'])
+    mem = MemoryManager(context, config['slave_id'], config=config)
     for k, v in config.get('initial_state', {}).items(): mem.write(k.replace('_stub',''), 1 if v else 0)
 
     # 1. Initialize Engine
-    programs = CLICKParser().parse(config['ladder_file'])
+    programs = CLICKParser(mem).parse(config['ladder_file'])
     engine = LogicEngine(mem, programs)
 
     # 2. Launch the modbus server with the specific ID from your config  (THREAD A)
@@ -1003,7 +1372,7 @@ def run_plc():
 
 
     # 4. start the Logic Loop in foreground   (MAIN THREAD)
-    run_loop(mem, engine)
+    run_loop(mem, engine, config)
 
 if __name__ == "__main__":
     run_plc()
