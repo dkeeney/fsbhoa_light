@@ -27,7 +27,7 @@ func (app *App) RunServer() error {
 	router.POST("/override/zone/:id/:state", app.handleOverride)
 	router.GET("/status", app.handleStatus)
         router.POST("/test/mapping/:id/:state", app.handleTestMapping)
-        router.POST("/trigger/zone/:id", app.handleTriggerTimer)
+        router.POST("/trigger-timer/zone/:id", app.handleTriggerTimer)
 
 	// Use ListenPort from config
 	return http.ListenAndServe(app.Config.ListenPort, router)
@@ -179,19 +179,25 @@ func (app *App) handleTriggerTimer(w http.ResponseWriter, r *http.Request, ps ht
             return
         }
 
+        // 1. Calculate the 'Off' timestamp (The "Bookkeeping")
+        duration := time.Duration(app.Config.QRCodeActuatedDuration) * time.Minute
+        offTime := time.Now().Add(duration)
+        qroffValue := uint16(offTime.Hour()*100 + offTime.Minute())
 
-	// 2. Execute the trigger
-	// We pulse the "ON" bit (C201+) for this zone.
-	// Your existing PulseZone function in plc_client.go handles finding 
-	// all lights associated with this zone and pulsing their ON bits.
-	err = PulseZone(app.Config, app.PLCConfig, zoneID, "on")
-	if err != nil {
-		log.Printf("Error pulsing PLC for zone %d: %v", zoneID, err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Timer trigger sent for zone %d", zoneID)
+        // 2. Write QROff to PLC (The "Paperwork")
+        // This allows the status panel to see the countdown
+        err = SetZoneQROff(app.Config, app.PLCConfig, zoneID, qroffValue)
+        if err != nil {
+            log.Printf("ERROR: Failed to set QROff for Zone %d: %v", zoneID, err)
+            http.Error(w, "Modbus Write Failed", 500)
+            return
+        }
+
+        log.Printf("SUCCESS: Zone %d QROff set to %s", zoneID, offTime.Format("15:04:05"))
+            
+        w.WriteHeader(http.StatusOK)
+        fmt.Fprintf(w, "Timer started for zone %d. Lights will expire at %s", 
+                zoneID, offTime.Format("15:04"))
 }
 
 

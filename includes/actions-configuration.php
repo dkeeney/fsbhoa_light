@@ -416,7 +416,7 @@ function fsbhoa_lighting_trigger_timer( WP_REST_Request $request ) {
     $port = isset($options['go_service_port']) ? absint($options['go_service_port']) : 8085;
     
     // We send this to a new endpoint in the Go service
-    $service_url = sprintf('http://localhost:%d/trigger/zone/%d', $port, $zone_id);
+    $service_url = sprintf('http://127.0.0.1:%d/trigger-timer/zone/%d', $port, $zone_id);
 
     $response = wp_remote_post($service_url, array('timeout' => 5));
 

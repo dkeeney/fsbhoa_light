@@ -27,7 +27,19 @@ document.addEventListener('DOMContentLoaded', function () {
         sync: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/sync', {
             method: 'POST',
             headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce }
-        })
+        }),
+
+        triggerTimer: (zoneId) => {
+            console.log(`📡 Sending trigger-timer request for Zone: ${zoneId}`);
+            return fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/trigger-timer', {
+                method: 'POST',
+                headers: { 
+                    'Content-Type': 'application/json', 
+                    'X-WP-Nonce': fsbhoa_lighting_data.nonce 
+                },
+                body: JSON.stringify({ zone_id: zoneId })
+            })
+        }
     };
 
     // Trigger Turbo Mode (Called after a button click)
@@ -143,9 +155,15 @@ document.addEventListener('DOMContentLoaded', function () {
             let timerHtml = '';
             if (qroffValue > 0) {
                 const formattedTime = formatQROffTime(qroffValue);
-                timerHtml = `<strong style="font-size:10px; color:#2271b1; font-family:monospace; margin-left:6px; border: 1px solid #d1ecf1; padding: 1px 3px; border-radius: 3px; background: #f8fdff;" title="Timer Expiration">Exp: ${formattedTime}</strong>`;
+                timerHtml = `
+                   <a href="#" class="trigger-timer-link" data-zone-id="${zone.id}" title="Timer Expiration" style="text-decoration:none;">
+                       <strong style="font-size:10px; color:#2271b1; font-family:monospace; margin-left:6px; border: 1px solid #d1ecf1; padding: 1px 3px; border-radius: 3px; background: #f8fdff;" title="Timer Expiration">Exp: ${formattedTime}</strong>
+                   </a>`;
             } else if (hasTimedCapability) {
-                timerHtml = `<span class="dashicons dashicons-clock" style="color:#ccc; font-size:17px; margin-left:6px; vertical-align:middle;" title="QR Trigger Available"></span>`;
+                timerHtml = `
+                   <a href="#" class="trigger-timer-link" data-zone-id="${zone.id}" title="Start Timer" style="text-decoration:none;">
+                        <span class="dashicons dashicons-clock" style="color:#ccc; font-size:17px; margin-left:6px; vertical-align:middle;" title="QR Trigger Available"></span>
+                   </a>`;
             }
 
 
@@ -352,6 +370,31 @@ document.addEventListener('DOMContentLoaded', function () {
                 console.error(error);
                 statusDiv.textContent = `Error: ${error.message}`;
                 app.querySelectorAll(`.override-link[data-zone-id="${zoneId}"]`).forEach(btn => btn.style.opacity = '1');
+            }
+        }
+        // Handle the Clock Icon or Expiration Text click
+        const timerLink = e.target.closest('.trigger-timer-link');
+    
+        if (timerLink) {
+            e.preventDefault();
+            const zoneId = timerLink.dataset.zoneId;
+            const statusDiv = document.getElementById('override-status');
+
+            timerLink.style.opacity = '0.5';
+            statusDiv.textContent = `Triggering 90-minute timer for Zone ${zoneId}...`;
+
+            try {
+                const response = await api.triggerTimer(zoneId);
+                if (!response.ok) throw new Error('Failed to trigger timer');
+
+                statusDiv.textContent = 'Timer active. Refreshing status...';
+                // Speed up polling to show the yellow light immediately
+                triggerBurstMode(); 
+            } catch (error) {
+                statusDiv.textContent = `Error: ${error.message}`;
+                console.error(error);
+            } finally {
+                timerLink.style.opacity = '1';
             }
         }
     });

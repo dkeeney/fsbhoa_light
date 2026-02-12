@@ -476,7 +476,7 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
     return fullStatus, nil
 }
 
-// SetZoneQROff updates the DS1101+ register for a specific zone with a timestamp.
+// SetZoneQROff updates the DS941+ register for a specific zone with a timestamp.
 func SetZoneQROff(cfg Config, configData *FullConfigurationData, zoneID int, qroff uint16) error {
     found := false
 
