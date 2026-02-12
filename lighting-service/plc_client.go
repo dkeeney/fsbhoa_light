@@ -435,7 +435,7 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
                 rawVal := uint16(resQR[i*2])<<8 | uint16(resQR[i*2+1])
 
                 if rawVal > 0 {
-                    log.Printf("DEBUG: Found QROff %d at Register Index %d on PLC %d", rawVal, i, plc)
+                    //log.Printf("DEBUG: Found QROff %d at Register Index %d on PLC %d", rawVal, i, plc)
         
                     for _, m := range configData.Mappings {
                         // Now 'i' correctly matches the 0-23 offset calculateLoopIndex returns

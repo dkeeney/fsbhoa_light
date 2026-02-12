@@ -193,7 +193,6 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 	today := strings.ToLower(now.Format("Mon")) // Note: Capital "M" for Format
 	currentPLC := uint16(now.Hour()*100 + now.Minute())
 	
-	// FIX: No parentheses after time.Minute
 	endTime := now.Add(time.Duration(durationMinutes) * time.Minute)
 	endPLC := uint16(endTime.Hour()*100 + endTime.Minute())
 
@@ -202,7 +201,18 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 	const PhotoEnd   uint16 = 630  // 6:30 AM
 
 	// 3. Check Spans
+        qrSpanDefined := false // Track if we find ANY QR-enabled spans
 	for _, span := range targetSched.Spans {
+                // Check if this span is even a QR type
+		trig := strings.ToUpper(span.OnTrigger)
+		isQRType := (trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" || trig == "QR_TIME")
+		if !isQRType {
+			continue
+		}
+
+		// If we are here, at least one QR span exists in the schedule
+		qrSpanDefined = true
+
 		dayMatch := false
 		for _, d := range span.DaysOfWeek {
 			if strings.ToLower(d) == today {
@@ -212,7 +222,6 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 		}
 		if !dayMatch { continue }
 
-		trig := strings.ToUpper(span.OnTrigger)
 		var sStart, sEnd uint16
 
 		if trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" {
@@ -239,13 +248,15 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 		} else {
 			if (currentPLC >= sStart && currentPLC <= sEnd) || (endPLC >= sStart && endPLC <= sEnd) {
 				return true, ""
-			} else {
-	                        return false, "outside_qr_window"
-                        }
+			}
 		}
 	}
 
-	return false, "qr_not_available"
+        if !qrSpanDefined {
+		return false, "qr_not_defined" // No QR spans exist in this schedule at all
+	}
+
+	return false, "outside_qr_window"
 }
 
 
