@@ -16,6 +16,11 @@ if ( file_exists( $path . 'wp-load.php' ) ) {
     require_once( $_SERVER['DOCUMENT_ROOT'] . '/wp-load.php' );
 }
 
+// Release the session lock so other pages can load
+if ( session_id() ) {
+    session_write_close();
+}
+
 // 2. Authentication
 $headers = getallheaders();
 // Note: You must define FSBHOA_LIGHTING_API_KEY in your Bluehost wp-config.php 
@@ -52,7 +57,7 @@ global $wpdb;
 $table_name = $wpdb->prefix . 'lighting_queue';
 
 $start_time = time();
-$max_wait = 45; // Wait window (seconds)
+$max_wait = 15; // Wait window (seconds)
 
 // 4. The Polling Loop
 while ((time() - $start_time) < $max_wait) {
@@ -85,7 +90,7 @@ while ((time() - $start_time) < $max_wait) {
         echo json_encode([
             "status" => "found",
             "job_id" => (int)$job->id,
-            "court"  => $job->court_name,
+            "zone_id"  => (int)$job->zone_id,
             "email"  => $job->user_email
         ]);
         exit; // Terminate immediately

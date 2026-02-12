@@ -3,7 +3,8 @@
 <style>
     #fsbhoa-map-monitor-app {
         max-width: 1200px;
-        margin: 0 auto;
+        margin: 20px 0; /* Add space between list and map */
+        clear: both;    /* Ensure it starts below the status table */
     }
     #map-monitor-wrapper {
         position: relative;
@@ -11,11 +12,14 @@
         background: #f4f4f4;
         overflow: hidden;
         min-height: 600px;
+        width: 100%; /* Ensure full width */
+        display: block; 
     }
     #map-monitor-image {
         display: block;
         width: 100%;
         height: auto;
+        min-height: 200px; /* Ensure it occupies space while loading */
     }
     #map-pin-overlay {
         position: absolute;

@@ -68,6 +68,15 @@ func main() {
 		Config:         cfg,
 	}
 
+        // Fetch initial config so the system isn't "blank" on boot
+        log.Println("Fetching initial configuration...")
+        initialCfg, err := FetchConfigurationFromAPI(app.Config)
+        if err == nil {
+            app.PLCConfig = initialCfg
+        } else {
+            log.Printf("Warning: Initial config fetch failed: %v", err)
+        }
+
 	// 4. Start Background Services
 	
 	// A. Remote Client (Bluehost) - Delegated to remote_client.go

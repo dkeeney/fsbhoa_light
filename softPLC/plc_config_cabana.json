@@ -11,8 +11,7 @@
     "C154_stub": false
   },
   "retentive_ranges": [
-        {"start": "DS100", "end": "DS939"},
-        {"start": "DS1000", "end": "DS1023"}
+        {"start": "DS100", "end": "DS1023"}
     ],
   "persistence_file": "retentive_memory_Cabana.json",
   "logging": {

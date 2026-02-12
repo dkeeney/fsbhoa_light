@@ -44,10 +44,10 @@
     }
 
     /* --- Bulb Colors --- */
-    .monitor-bulb.status-auto-on { color: #f5a623; text-shadow: 0 0 5px #f5a623; }
-    .monitor-bulb.status-manual-on { color: #ff5722; text-shadow: 0 0 5px #ff5722; }
-    .monitor-bulb.status-manual-off { color: #2196f3; text-shadow: 0 0 5px #2196f3; }
-    .monitor-bulb.status-auto-off { color: #cccccc; }
+    .monitor-bulb.status-auto-on { color: #f5a623; text-shadow: 0 0 5px #f5a623; } /* Yellow-Gold */
+    .monitor-bulb.status-manual-on { color: #ff5722; text-shadow: 0 0 5px #ff5722; } /* Red-Orange Override */
+    .monitor-bulb.status-manual-off { color: #2196f3; text-shadow: 0 0 5px #2196f3; } /* Blue (Manual Off) */
+    .monitor-bulb.status-auto-off { color: #cccccc; } /* Gray */
     
     .monitor-bulb.status-pulsing {
         color: #ff5722;

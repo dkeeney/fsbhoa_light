@@ -97,37 +97,56 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             // 2. Determine Logical State (Schedule)
-            // FIX: Perform Reverse Lookup to find the Zone
-            let isSchedActive = false;
+            // Perform Reverse Lookup to find the Zone
+            let SchedStatus = 0;
             
             // Find the zone where mapping_ids array contains this mapping.id
             // Ensure type matching (string vs int)
             const ownerZone = allZones.find(z => 
-                z.mapping_ids && z.mapping_ids.some(id => id == mapping.id)
+                z.mapping_ids && z.mapping_ids.some(id => String(id) === String(mapping.id))
             );
 
             if (ownerZone) {
-                // Check if the zone's schedule is currently active
-                if (liveStatus[`Sched${ownerZone.schedule_id}`] === true) {
-                    isSchedActive = true;
-                }
+                // Fetch the numeric status (0=Inactive, 1=Active, 2=QR Enabled)
+                schedStatus = liveStatus[`Sched${ownerZone.schedule_id}`] || 0;
             }
+            
+            // Check for active timer
+            const qroffValue = ownerZone ? (liveStatus[`qroff_zone_${ownerZone.id}`] || 0) : 0;
 
             // 3. Determine Color Class
             let statusClass = '';
             let currentState = 'off';
+            const isActuallyOn = monitoredOn > 0;
+            const isPartial = isActuallyOn && monitoredOn < monitoredTotal;
+            let titleText = mapping.description;
+            if (isActuallyOn && qroffValue > 0) {
+                titleText += ` (QR Timer ends ${formatPLCTime(qroffValue)})`;
+            }
+            pin.title = titleText;
 
-            if (monitoredTotal > 0 && monitoredOn > 0 && monitoredOn < monitoredTotal) {
-                statusClass = 'status-partial'; // Pulsing
-                currentState = 'on'; 
-            } 
-            else if (monitoredOn > 0) {
+            //if (isActuallyOn) {
+            //    console.log(`Id: ${mapping.id}, Pin ${mapping.description}: qroffValue is ${qroffValue}, ownerZone is ${ownerZone ? ownerZone.id : 'NONE'}`);
+            //}
+
+            if (isPartial) {
+                statusClass = 'status-partial'; // CSS handles the pulse animation
                 currentState = 'on';
-                statusClass = isSchedActive ? 'status-auto-on' : 'status-manual-on'; // Yellow vs Orange
-            } 
+            }
+            else if (isActuallyOn) {
+                currentState = 'on';
+                // Yellow for Logic-driven or QR ON, Red-Orange for Manual ON
+                // Logic: It is "Auto" if the schedule is 1 OR if we have a non-zero timer
+                if (schedStatus === 1 || qroffValue > 0) {
+                    statusClass = 'status-auto-on'; // Yellow
+                } else {
+                    statusClass = 'status-manual-on'; // Red
+                }
+            }
             else {
                 currentState = 'off';
-                statusClass = isSchedActive ? 'status-manual-off' : 'status-auto-off'; // Blue vs Black
+                // Blue if Sched is 1 but physically OFF, otherwise Gray
+                statusClass = (schedStatus === 1) ? 'status-manual-off' : 'status-auto-off';
             }
 
             // Apply Classes
@@ -138,24 +157,27 @@ document.addEventListener('DOMContentLoaded', function () {
             pin.dataset.state = currentState;
         });
 
-        // Update Photocell Text
+        // Update Photocell Text (Consistent with monitor-manager)
         const photocellStatus = liveStatus['Photocell'] === true
-            ? '<span style="color: #333; font-weight: bold;">DARK</span>'
-            : '<span style="color: orange; font-weight: bold;">LIGHT</span>';
-        statusIndicator.innerHTML = `<strong>Photocell:</strong> ${photocellStatus}`;
+            ? '<span style="color: #333; font-weight: bold;">NIGHT</span> (Sundown Active)'
+            : '<span style="color: orange; font-weight: bold;">DAY</span> (Waiting for Sundown)';
+        statusIndicator.innerHTML = `<strong>Status:</strong> ${photocellStatus}`;
     }
 
     async function updateStatus() {
         if (isUpdating) return;
         isUpdating = true;
         try {
-            // Fetch Config ONCE
-            if (allMappings.length === 0) {
+            // Re-attempt config fetch if data is missing
+            if (allMappings.length === 0 || allZones.length === 0) {
                 const [mapRes, zoneRes] = await Promise.all([api.getMappings(), api.getZones()]);
                 if (mapRes.ok && zoneRes.ok) {
                     allMappings = await mapRes.json();
                     allZones = await zoneRes.json();
+                    console.log('Map Data Loaded:', allMappings.length, 'mappings found.');
                     renderPins();
+                } else {
+                    console.error('Map Monitor: API fetch failed', mapRes.status, zoneRes.status);
                 }
             }
 
@@ -176,7 +198,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // --- Init ---
     if (!mapImageUrl) {
-        app.innerHTML = '<p>No map image set.</p>';
+        console.warn('Map Monitor: map_image_url is missing from localization data.'); 
+        app.innerHTML = '<p>No map image set. Please check Lighting Settings.</p>';
         return;
     }
     imageEl.src = mapImageUrl;
@@ -194,6 +217,18 @@ document.addEventListener('DOMContentLoaded', function () {
             updateStatus(); // Fetch immediately when user looks at the screen
         }
     });
+
+
+    function formatPLCTime(val) {
+        if (!val || val === 0) return "";
+        let hours = Math.floor(val / 100);
+        let mins = val % 100;
+        let ampm = hours >= 12 ? 'pm' : 'am';
+        hours = hours % 12;
+        hours = hours ? hours : 12; 
+        let strMins = mins < 10 ? '0' + mins : mins;
+        return hours + ':' + strMins + ampm;
+    }
 });
 
 

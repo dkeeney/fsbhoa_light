@@ -333,7 +333,6 @@ function fsbhoa_lighting_get_full_config() {
             $config_data['zones'][] = [
                 'id' => (int)$row['id'], 
                 'zone_name' => $row['zone_name'],
-                'is_timed' => (int)$row['is_timed'],
                 'schedule_id' => (int)$row['schedule_id'] 
             ];
         }

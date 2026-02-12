@@ -1,80 +1,82 @@
 jQuery(document).ready(function($) {
-    
-    // Check if the "Auto Trigger" container exists on the page
-    var $triggerContainer = $('.fsbhoa-auto-trigger');
+    var $container = $('.fsbhoa-auto-trigger');
 
-    if ($triggerContainer.length > 0) {
-        var court = $triggerContainer.data('court');
-        var $msg = $triggerContainer.find('.fsbhoa-status-msg');
-        var $loader = $triggerContainer.find('.fsbhoa-loader');
-        
-        // Execute immediately
-        initiateAutoTrigger(court, $msg, $loader);
-    }
+    // Only run if we are on the activation screen (Stage 2)
+    if ($container.length > 0) {
+        var zoneId = $container.data('zone-id');
+        var pollInterval;
+        var timeoutCounter = 0;
+        var maxWaitSeconds = 45; // Stop spinning after 45 seconds if no response
 
-    function initiateAutoTrigger(court, $msg, $loader) {
-        // 1. Send Request
+        console.log("FSBHOA: Initializing activation for Zone " + zoneId);
+
+        // 1. SEND INITIAL REQUEST (Create Job)
         $.post(fsbhoa_vars.ajax_url, {
             action: 'fsbhoa_request_lights',
-            nonce: fsbhoa_vars.nonce,
-            court: court
+            zone_id: zoneId,
+            nonce: fsbhoa_vars.nonce
         }, function(response) {
             if (response.success) {
-                // 2. Request Stashed - Start Polling
-                $msg.text('Controller Contacted. Waiting for confirmation...');
-                pollStatus(response.data.job_id, $msg, $loader);
+                console.log("FSBHOA: Job ID " + response.data.job_id + " is " + response.data.status);
+                
+                // If the job was already successful (reused), skip to finished
+                if (response.data.status === 'success') {
+                    redirectToFinished('success');
+                } else {
+                    startPolling(response.data.job_id);
+                }
             } else {
-                showError($msg, $loader, response.data || 'Error sending request.');
+                console.error("FSBHOA: Initial request failed.");
+                redirectToFinished('error');
             }
         }).fail(function() {
-            showError($msg, $loader, 'Network error. Please reload page.');
+            redirectToFinished('server_error');
         });
     }
 
-    function pollStatus(jobId, $msg, $loader) {
-        var attempts = 0;
-        var maxAttempts = 30; // 60 seconds max wait
+    // 2. STATUS POLLING ENGINE
+    function startPolling(jobId) {
+        $('.fsbhoa-status-msg').text("Request sent. Waiting for controller...");
 
-        var interval = setInterval(function() {
-            attempts++;
-            if (attempts > maxAttempts) {
-                clearInterval(interval);
-                showError($msg, $loader, 'Timeout: Controller did not respond.');
-                return;
-            }
+        pollInterval = setInterval(function() {
+            timeoutCounter += 2;
 
             $.post(fsbhoa_vars.ajax_url, {
                 action: 'fsbhoa_check_status',
                 job_id: jobId
             }, function(response) {
                 if (response.success) {
-                    var status = response.data.status;
-                    
-                    if (status === 'success') {
-                        // SUCCESS
-                        clearInterval(interval);
-                        $loader.html('<span style="font-size: 50px; color: green;">&#10003;</span>'); // Big Checkmark
-                        $msg.text('Success! Lights are on.').css('color', 'green');
-                        
-                    } else if (status.indexOf('denied') !== -1) {
-                        // DENIED
-                        clearInterval(interval);
-                        var errorText = 'Access Denied.';
-                        if (status === 'denied_no_swipe') {
-                            errorText = 'Denied: No recent gate swipe found.';
-                        } else if (status === 'denied_swipe_required') {
-                             errorText = 'Denied: Please swipe at West Gate first.';
-                        }
-                        showError($msg, $loader, errorText);
+                    var currentStatus = response.data.status;
+                    console.log("FSBHOA: Current Job Status: " + currentStatus);
+
+                    // If status is no longer "waiting", we move to the final UI
+                    if (currentStatus !== 'pending' && currentStatus !== 'processing') {
+                        stopPolling();
+                        redirectToFinished(currentStatus);
                     }
                 }
             });
-        }, 2000); // Poll every 2 seconds
+
+            // Safety check: Don't let the spinner run forever
+            if (timeoutCounter >= maxWaitSeconds) {
+                stopPolling();
+                redirectToFinished('timeout');
+            }
+        }, 2000); // Check every 2 seconds
     }
 
-    function showError($msg, $loader, text) {
-        $loader.html('<span style="font-size: 50px; color: red;">&#10007;</span>'); // Big X
-        $msg.text(text).css('color', 'red');
+    function stopPolling() {
+        if (pollInterval) clearInterval(pollInterval);
+    }
+
+    // 3. THE REDIRECTOR (Stage 2 -> Stage 3)
+    function redirectToFinished(status) {
+        // Build the URL for the Stage 3 Finished UI
+        // We use window.location.pathname to strip existing query args but keep the base URL
+        var finalUrl = window.location.pathname + "?finished=1&status=" + status;
+        
+        console.log("FSBHOA: Redirecting to " + finalUrl);
+        window.location.href = finalUrl;
     }
 });
 

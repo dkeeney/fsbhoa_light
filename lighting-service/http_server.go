@@ -14,6 +14,7 @@ import (
 // App holds our application state, like the config.
 type App struct {
 	Config Config
+        PLCConfig *FullConfigurationData
 }
 
 
@@ -42,7 +43,7 @@ func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ http
 	}
 	log.Println("Received /sync trigger. Fetching latest config from WordPress API and pushing to PLCs.")
 
-	// Fetch the full configuration from WordPress API
+	// 1. Fetch the full configuration from WordPress API
 	configData, err := FetchConfigurationFromAPI(app.Config) 
 	if err != nil {
 		log.Printf("Error fetching config from API: %v", err)
@@ -50,10 +51,14 @@ func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ http
 		return
 	}
 
+        // 2. Update the shared state!
+        app.PLCConfig = configData 
+
+        // 3. Push to PLCs
 	// Translate the config into PLC data and push it.
 	log.Println("Pushing config to PLCs...")
 	// Translate the config into PLC data and push it.
-	err = PushConfigurationToPLCs(app.Config, configData) // Existing function call
+	err = PushConfigurationToPLCs(app.Config, app.PLCConfig) 
 	if err != nil {
 		log.Printf("Error pushing config to PLCs: %v", err)
 		http.Error(w, "Failed to push config to PLCs", http.StatusInternalServerError)
@@ -66,19 +71,17 @@ func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ http
 
 // handleOverride needs the config to know which outputs to pulse.
 func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	var err error
 	zoneID, _ := strconv.Atoi(ps.ByName("id"))
 	state := ps.ByName("state") // "on" or "off"
 	log.Printf("Received override request for Zone %d to state %s", zoneID, state)
 
-	// Fetch the config *each time* an override happens to ensure we have the latest mappings.
-	configData, err := FetchConfigurationFromAPI(app.Config)
-	if err != nil {
-		log.Printf("Error fetching config for override: %v", err)
-		http.Error(w, "Failed to fetch config for override", http.StatusInternalServerError)
-		return
-	}
+        if app.PLCConfig == nil {
+            http.Error(w, "Service initializing, try again in a moment", 503)
+            return
+        }
 
-	err = PulseZone(app.Config, configData, zoneID, state) // Pass configData
+	err = PulseZone(app.Config, app.PLCConfig, zoneID, state) // Pass configData
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -86,32 +89,32 @@ func (app *App) handleOverride(w http.ResponseWriter, r *http.Request, ps httpro
 	w.WriteHeader(http.StatusOK)
 }
 
-// handleStatus needs the config to know which outputs/inputs to read.
 func (app *App) handleStatus(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
-	//log.Println("Received /status request. Fetching config and polling PLCs.")
-        w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+    w.Header().Set("Content-Type", "application/json")
+    w.Header().Set("Access-Control-Allow-Origin", "*")
 
-        var status map[string]interface{}
-	var err error
+    var status map[string]interface{}
+    var err error
 
-	// Fetch the config *each time* status is requested.
-	configData, err := FetchConfigurationFromAPI(app.Config)
-	if err != nil {
-		//log.Printf("Error fetching config for status: %v", err)
-		http.Error(w, "Failed to fetch config for status", http.StatusInternalServerError)
-		return
-	}
-	status, err = ReadStatusFromPLCs(app.Config, configData) // Pass configData
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+    // Use the SHARED config we already have in memory
+    if app.PLCConfig == nil {
+        log.Println("Status request received but PLCConfig is nil. Attempting emergency fetch...")
+        app.PLCConfig, err = FetchConfigurationFromAPI(app.Config)
+        if err != nil {
+            http.Error(w, "Configuration not loaded and API fetch failed", http.StatusInternalServerError)
+            return
+        }
+    }
 
-	json.NewEncoder(w).Encode(status)
+    // Pass the shared app.PLCConfig to the PLC reader
+    status, err = ReadStatusFromPLCs(app.Config, app.PLCConfig) 
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    json.NewEncoder(w).Encode(status)
 }
-
-
 
 
 // startTimeSyncer runs a continuous loop to keep PLC clocks in sync.
@@ -149,15 +152,15 @@ func (app *App) syncAllPLCsTime() {
 func (app *App) handleTestMapping(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	mappingID, _ := strconv.Atoi(ps.ByName("id"))
 	state := ps.ByName("state")
+        var err error
 	
-	// Fetch config to ensure we have latest mappings
-	configData, err := FetchConfigurationFromAPI(app.Config)
-	if err != nil {
-		http.Error(w, "Failed to fetch config", http.StatusInternalServerError)
-		return
-	}
+        if app.PLCConfig == nil {
+            http.Error(w, "Service initializing, try again in a moment", 503)
+            return
+        }
 
-	err = PulseMapping(app.Config, configData, mappingID, state)
+
+	err = PulseMapping(app.Config, app.PLCConfig, mappingID, state)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -169,20 +172,19 @@ func (app *App) handleTestMapping(w http.ResponseWriter, r *http.Request, ps htt
 func (app *App) handleTriggerTimer(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	zoneID, _ := strconv.Atoi(ps.ByName("id"))
 	log.Printf("Received TIMER TRIGGER request for Zone %d", zoneID)
+        var err error
 
-	// 1. Fetch current config to find the mapping for this zone
-	configData, err := FetchConfigurationFromAPI(app.Config)
-	if err != nil {
-		log.Printf("Error fetching config for timer trigger: %v", err)
-		http.Error(w, "Failed to fetch configuration", http.StatusInternalServerError)
-		return
-	}
+        if app.PLCConfig == nil {
+            http.Error(w, "Service initializing, try again in a moment", 503)
+            return
+        }
+
 
 	// 2. Execute the trigger
 	// We pulse the "ON" bit (C201+) for this zone.
 	// Your existing PulseZone function in plc_client.go handles finding 
 	// all lights associated with this zone and pulsing their ON bits.
-	err = PulseZone(app.Config, configData, zoneID, "on")
+	err = PulseZone(app.Config, app.PLCConfig, zoneID, "on")
 	if err != nil {
 		log.Printf("Error pulsing PLC for zone %d: %v", zoneID, err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)

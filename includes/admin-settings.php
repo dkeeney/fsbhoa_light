@@ -13,6 +13,7 @@ class Fsbhoa_Lighting_Admin_Settings {
     private $config_file_path = '/var/lib/fsbhoa/lighting_service.json';
     private $default_log_path = '/home/fsbhoa/fsbhoa_light/lighting-service/lighting-service.log';
     private $default_bluehost_url = 'https://fsbhoa.com/wp-content/plugins/fsb-lighting/api/wait_for_job.php';
+    private $default_bluehost_qr_url = 'https://fsbhoa.com/lights';
 
     public function __construct() {
         add_action( 'admin_menu', array( $this, 'add_settings_page' ) );
@@ -72,19 +73,6 @@ class Fsbhoa_Lighting_Admin_Settings {
             ['id' => 'go_service_port', 'type' => 'number', 'default' => 8085, 'desc' => 'Port for the Go service HTTP server.']
         );
         add_settings_field(
-            'qr_code_actuated_duration', 
-            'QR Code Actuated Duration (Minutes)', 
-            array($this, 'render_field'), 
-            $this->page_slug, 
-            'fsbhoa_lighting_section_service', 
-            [
-                'id' => 'qr_code_actuated_duration', 
-                'type' => 'number', 
-                'default' => 90, 
-                'desc' => 'How long lights stay on after activation via QR code (in minutes).'
-            ]
-        );
-        add_settings_field(
 		'log_file_path', 
 		'Go Service Log File Path', 
 		array($this, 'render_field'), 
@@ -117,6 +105,34 @@ class Fsbhoa_Lighting_Admin_Settings {
             'fsbhoa_lighting_section_map',
             ['id' => 'map_image_url', 'desc' => 'Upload or select the map image from the Media Library.']
         );
+
+        add_settings_field(
+            'bluehost_qr_url',
+            'Public QR Scan URL',
+            array($this, 'render_field'), 
+            $this->page_slug, 
+            'fsbhoa_lighting_section_remote', 
+            [
+                'id' => 'bluehost_qr_url', 
+                'default' => $this->default_bluehost_qr_url,
+                'desc' => 'The base URL to use in QR code; (HOAs website)/lights.',
+            ]
+        );
+        
+        add_settings_field(
+            'qr_code_actuated_duration', 
+            'QR Code Actuated Duration (Minutes)', 
+            array($this, 'render_field'), 
+            $this->page_slug, 
+            'fsbhoa_lighting_section_remote', 
+            [
+                'id' => 'qr_code_actuated_duration', 
+                'type' => 'number', 
+                'default' => 90, 
+                'desc' => 'How long lights stay on after activation via QR code (in minutes).'
+            ]
+        );
+
         add_settings_field(
             'bluehost_url', 
             'Bluehost API URL', 
@@ -236,6 +252,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         $output = get_option($this->option_name, []);
         // Sanitize each field appropriately
         $output['go_service_port'] = isset( $input['go_service_port'] ) ? absint( $input['go_service_port'] ) : 8085;
+        $output['bluehost_qr_url'] = isset( $input['bluehost_qr_url'] ) ? esc_url_raw( $input['bluehost_qr_url'] ) : $this->default_bluehost_qr_url;
         $output['qr_code_actuated_duration'] = isset( $input['qr_code_actuated_duration'] ) ? absint( $input['qr_code_actuated_duration'] ) : 90;
         $output['bluehost_url'] = isset( $input['bluehost_url'] ) ? esc_url_raw( $input['bluehost_url'] ) : $this->default_bluehost_url;
         $output['bluehost_api_key'] = isset( $input['bluehost_api_key'] ) ? sanitize_text_field( $input['bluehost_api_key'] ) : '';

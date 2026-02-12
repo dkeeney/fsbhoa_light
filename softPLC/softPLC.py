@@ -19,6 +19,10 @@ class LogicResetException(Exception): pass
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("SoftPLC")
 
+# Mute the Flask/Werkzeug "GET /" requests
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 # --- 1. MEMORY MANAGER ---
 class MemoryManager:
     def __init__(self, context, slave_id=0x01, config=None):
@@ -105,7 +109,7 @@ class MemoryManager:
                     stored_data = json.load(f)
                     for addr_label, val in stored_data.items():
                         self.write(addr_label, val)
-                logger.info(f"Persistence: Loaded {len(stored_data)} registers from {filename}")
+                #logger.info(f"Persistence: Loaded {len(stored_data)} registers from {filename}")
             except Exception as e:
                 logger.error(f"Persistence: Load failed: {e}")
         self.needs_save = False
@@ -143,7 +147,7 @@ class MemoryManager:
         try:
             with open(filename, 'w') as f:
                 json.dump(data_to_save, f, indent=4)
-            logger.info(f"Persistence: Successfully saved {len(data_to_save)} registers to {filename}")
+            #logger.info(f"Persistence: Successfully saved {len(data_to_save)} registers to {filename}")
         except Exception as e:
             logger.error(f"Persistence: Save failed: {e}")
 
@@ -302,7 +306,7 @@ class CLICKParser:
                 # Store the parsed data for execution
                 programs[block].append({
                     "id": int(rid),
-                    "conds": self._parse_conds(c_part),
+                    "conds": c_part,
                     "acts": self._parse_acts(a_part)
                 })
                 
@@ -315,73 +319,6 @@ class CLICKParser:
                     self.mem.add_error(f"Syntax Error: {text[:30]}...")
 
 
-    def _parse_conds(self, cond_text):
-        """
-        The Slicer: Finds top-level bracketed blocks.
-        Input: "[A][OR [B][C]][D]"
-        Output: ["A", "OR [B][C]", "D"] (with brackets removed)
-        """
-        blocks = []
-        stack = 0
-        start = -1
-        
-        for i, char in enumerate(cond_text):
-            # --- STOP CHECK ---
-            # If we hit the action markers, stop looking for conditions
-            if stack == 0 and (char == '(' or char == '-'):
-                break
-
-            if char == '[':
-                if stack == 0: 
-                    start = i
-                stack += 1
-            elif char == ']':
-                stack -= 1
-                if stack == 0 and start != -1:
-                    blocks.append(cond_text[start+1:i])
-                    start = -1
-                elif stack < 0:
-                    self._report_error(f"PARSER ERROR: Stray ']' at pos {i} in: {cond_text}")
-                    stack = 0 
-            else:
-                # --- STRICT MODE CHECK ---
-                # If we aren't inside a bracket and the char isn't whitespace, it's 'naked' logic
-                if stack == 0 and not char.isspace():
-                    self._report_error(f"PARSER ERROR: Naked condition/Unexpected text '{char}' at pos {i} in: {cond_text}")
-
-        if stack > 0:
-            self._report_error(f"PARSER ERROR: Missing closing ']' in logic: {cond_text}")
-
-        # Map each block to its structured dictionary
-        return [self._parse_single_cond(b) for b in blocks]
-
-
-    def _parse_single_cond(self, text):
-        """
-        The Interpreter: Categorizes a single bracketed block based on 
-        prefix keywords. Stays strictly away from infix complexity.
-        """
-        text = text.strip()
-        
-        # 1. OR Group: [OR [A][B]]
-        if text.startswith("OR "):
-            return {"type": "OR", "val": self._parse_conds(text[3:].strip())}
-        
-        # 2. AND Group: [AND [A][B]] (for explicit sub-grouping)
-        if text.startswith("AND "):
-            return {"type": "AND", "val": self._parse_conds(text[4:].strip())}
-
-        # 3. NOT Operator: [NOT C100]
-        if text.startswith("NOT "):
-            return {"type": "NOT", "val": text[4:].strip()}
-        
-        # 4. CMP Operator: [CMP DS3 == 1]
-        if text.startswith("CMP "):
-            return {"type": "CMP", "val": text[4:].strip()}
-            
-        # 5. Base Case: DIRECT (Bit addresses like C1, DS10, YD1)
-        # If no prefix is found, it must be a standard address.
-        return {"type": "DIRECT", "val": text}
 
     def _parse_acts(self, text):
         acts = []
@@ -515,7 +452,7 @@ class LogicEngine:
                 # Append each condition with its status
                 for text, success in details:
                     color = "#00ff41" if success else "#ff4500" # Green or Red-Orange
-                    display_text += f"\n   <span style='color:{color}'>↳ {text}</span>"
+                    display_text += f"<br>   <span style='color:{color}'>↳ {text}</span>"
             
                 self.mem.last_rung = display_text
 
@@ -525,13 +462,13 @@ class LogicEngine:
                 inst = act['inst']
                 args = act['args']
 
-                if inst == "FOR":
+                if inst == "FOR" and cond_passed:
                     count_match = re.search(r'\d+', args)
                     count = int(count_match.group()) if count_match else 1
                     loop_stack.append({"start": ptr, "curr": 1, "max": count})
                     self.mem.append_display(f"[FOR {count}]")
                     
-                elif inst == "NEXT":
+                elif inst == "NEXT" and cond_passed:
                     if loop_stack:
                         loop = loop_stack[-1]
                         if loop["curr"] < loop["max"]:
@@ -605,75 +542,97 @@ class LogicEngine:
             return # Exit this scan immediately
 
 
-    def eval_conds(self, conds):
-        # Returns (Overall_Boolean, List_of_Diagnostic_Strings)
+    def extract_nested_blocks(self, s):
+        """
+        Scanner: Extracts top-level bracketed units while respecting nesting.
+        Input: "[OR [C151] [CMP A!=B]] [C100]"
+        Output: ["OR [C151] [CMP A!=B]", "C100"]
+        """
+        results = []
+        count = 0
+        start = 0
+        for i, char in enumerate(s):
+            if char == '[':
+                if count == 0:
+                    start = i + 1  # Start just after the opening bracket
+                count += 1
+            elif char == ']':
+                count -= 1
+                if count == 0:
+                    results.append(s[start:i]) # Content inside the brackets
+        return results
+
+    def eval_conds(self, cond_str):
         details = []
-        overall_result = True
+        cond_str = cond_str.strip()
 
-        # --- Ensure conds is always a list ---
-        if isinstance(conds, dict):
-            conds = [conds]
-
-        for c in conds:
-            c_type = c['type']
-            label = c['val']
+        # Handle the case where the string is NOT bracketed (Terminal Leaf)
+        if not cond_str.startswith('['):
             success = False
-
-            #print(f"eval_conds() {c_type}")
-
-            if c_type == "DIRECT":
-                success = self.mem.read(label)
-                details.append((f"{label}", success))
-            
-            elif c_type == "NOT":
+            upper = cond_str.upper()
+            if upper.startswith("CMP "):
+                success, math_str = self.eval_cmp(cond_str[4:])
+                details.append((f" CMP {math_str}={success}", success))
+            elif upper.startswith("NOT "):
+                label = cond_str[4:].strip()
                 success = not self.mem.read(label)
-                details.append((f"NOT {label}", success))
-            
-            elif c_type == "CMP":
-                # eval_cmp now returns (bool, "2 > 24")
-                success, math_str = self.eval_cmp(label)
-                details.append((f"CMP {math_str}", success))
-            
-            elif c_type == "OR":
-                # Recursive call for the OR group
-                
-                for branch in label:
-                    # 1. Evaluate this specific branch
-                    branch_result, branch_detail = self.eval_conds(branch)
+                details.append((f" NOT ({label})={success}", success))
+            else:
+                success = self.mem.read(cond_str)
+                details.append((f" {cond_str}={success}", success))
+            return success, details
 
-                    # 2. Add to trace (indented to show it's inside an OR)
-                    # branch_detail[0][0] is the text of the condition (e.g., "NOT C1003")
-                    label_text = branch_detail[0][0] if branch_detail else "Branch"
-                    details.append((f"  ↳ OR-Branch: {label_text}", branch_result))
+        # Otherwise, split into top-level blocks [A][B] (Implicit AND)
+        blocks = self.extract_nested_blocks(cond_str)
+        for block in blocks:
+            success = False
+            block_upper = block.upper().strip()
+
+            if block_upper.startswith("OR "):
+                branches = self.extract_nested_blocks(block[3:])
+                branch_match = False
+                details.append(("OR (", "header"))
+                for b_str in branches:
+                    b_res, b_details = self.eval_conds(b_str)
+                    details.extend(b_details)
                     
-                    # 3. Short-circuit logic: If TRUE, we stop evaluating this OR block
-                    if branch_result:
-                        success = True
-                        break # Stop evaluating further OR arguments
+                    if b_res:
+                        branch_match = True
+                        details.extend(b_details)
+                        break 
+                details.append((f") = {branch_match}", branch_match))
+                success = branch_match
 
-            elif c_type == "AND":
-                success, sub_details = self.eval_conds(label)
-                if len(sub_details) > 1:
-                    details.append(("AND GROUP", success))
-                for sub_label, sub_success in sub_details:
-                    details.append((f"  & {sub_label}", sub_success))
+            elif block_upper.startswith("AND "):
+                success, sub_details = self.eval_conds(block[4:])
+                details.append(("AND (", "header"))
+                details.extend(sub_details)
+                details.append((f") = {success}", success))
+
+            else:
+                # Recurse to handle the content of the bracket
+                success, sub_details = self.eval_conds(block)
+                details.extend(sub_details)
 
             if not success:
-                overall_result = False
-                # We stop processing the AND chain at the first failure
-                break
+                return False, details
 
-        return overall_result, details
+        return True, details
+
 
     def eval_cmp(self, expr):
         try:
-            # 1. Flexible Regex for registers, constants, and indices
-            match = re.search(r"([A-Z0-9\[\]]+)\s*([><=!]+)\s*([A-Z0-9]+)", expr)
+            # 1.  Regex: Allows Parentheses, *, +, and Spaces for Clock Math
+            # Group 1: Left side (Supports DS30, (SD24 * 100) + SD25, etc.)
+            # Group 2: Operator (==, !=, >, etc.)
+            # Group 3: Right side
+            match = re.search(r"(.+?)\s*([><=!]+)\s*(.+)", expr)
             if not match:
                 logger.warning(f"CMP Regex Failed: '{expr}'")
                 return False, f"Regex Fail: {expr}"
 
             v1_label, op, v2_label = match.groups()
+            v1_label, v2_label = v1_label.strip(), v2_label.strip()
 
             # 2. Get actual values (handling the 'DS3' vs '24' logic)
             val1 = self.mem.read(v1_label) if not v1_label.isdigit() else int(v1_label)
@@ -682,6 +641,7 @@ class LogicEngine:
             # 3. Force to Integers to avoid string-sorting errors (e.g., "9" > "10")
             n1 = int(val1 if val1 is not None else 0)
             n2 = int(val2 if val2 is not None else 0)
+
 
             # 4. Perform comparison
             ops = {
@@ -693,7 +653,7 @@ class LogicEngine:
             result = ops.get(op, lambda x, y: False)(n1, n2)
 
             # 5. ALWAYS return a tuple (result, trace_string)
-            trace = f"{v1_label}({n1}) {op} {n2}"
+            trace = f"({v1_label}({n1}) {op} {v2_label}({n2}))"
         
             return result, trace
 
@@ -1057,13 +1017,10 @@ DASHBOARD_HTML = """
             </form>
             {% endfor %}
         </div>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;">
-            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Sequencer</span>DS3: {{ mem.read('DS3') }}</div>
-            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">OnReq ptr</span>DS16: {{ mem.read('DS16') }}</div>
-            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">OffReq ptr</span>SD17: {{ mem.read('SD17') }}</div>
-            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Day Mask</span>DH49: {{ "0x%02X" | format(mem.read('DH49')) }}</div>
-            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Span Idx</span>DS2: {{ mem.read('DS2') }}</div>
-            <div style="border: 1px solid #444; padding: 10px; background: #000;"><span class="label">Base Ptr</span>DS21: {{ mem.read('DS21') }}</div>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
+            {% for ds in ['DS1','DS2', 'DS3', 'DS4', 'DS5'] %}
+                <div> {{ds}} = {{ mem.read(ds) }}</div>
+            {% endfor %}
         </div>
     </div>
     <div class="panel">
@@ -1071,20 +1028,32 @@ DASHBOARD_HTML = """
         <div class="light-grid">
             {% for i in range(1, 25) %}
             {% set c_addr = 101 + (i-1) %}
-            {% set ds_curr = 1000 + (i-1) %}
-            {% set ds_reqON = 200 + (i) %}
-            {% set ds_reqOFF = 250 + (i) %}
+            {% set ds_map = 1000 + (i-1) %}   {# Mapping: DS1000-1023 #}
+            {% set c_reqON = 200 + (i) %}     {# ReqON: C201-224 #}
+            {% set c_reqOFF = 250 + (i) %}    {# ReqOFF: C251-274 #}
+            {% set ds_QROff = 940 + (i) %}    {# QROff: DS941-964 #}
+
+            {# Calculate Y addresses. which 16-bit bank we are in #}
+            {# Lights 1-8 -> Y1xx, 9-16 -> Y2xx, 17-24 -> Y3xx #}
+            {% set bank = ((i-1) // 8) + 1 %}
+            {% set pair_idx = ((i-1) % 8) %}
+    
+            {% set y_on = (bank * 100) + (2 * pair_idx + 1) %}
+            {% set y_off = (bank * 100) + (2 * pair_idx + 2) %}
+
             <div style="border: 1px solid #333; padding: 10px; background: #0a0a0a;">
                 <div style="display: flex; justify-content: space-between; font-size: 0.7em; color: #666; margin-bottom: 5px;">
-                    <span>#{{ i }}</span><span>C{{ c_addr }}</span>
+                    <span style="color: #ffca00;">PLC{{ config.slave_id }}-Y{{ y_on }}</span>
+                    <span>C{{ c_addr }}</span>
                 </div>
                 <div style="display: flex; justify-content: center; margin-bottom: 10px;">
                     <div class="bulb {{ 'on' if mem.read('C' + (c_addr|string)) else 'off' }}"></div>
                 </div>
                 <div style="font-size: 0.7em; border-top: 1px solid #222; padding-top: 5px;">
-                    <div style="color: #00ff41;">MAP: <nbsp> {{ mem.read('DS' + (ds_curr|string)) }}</div>
-                    <div style="color: #00bfff;">ReqON: <nbsp>{{ mem.read('DS' + (ds_reqON|string)) }}</div>
-                    <div style="color: #00bfff;">ReqOFF: {{ mem.read('DS' + (ds_reqOFF|string)) }}</div>
+                    <div style="color: #00ff41;">MAP: <nbsp> {{ mem.read('DS' + (ds_map|string)) }}</div>
+                    <div style="color: #00bfff;">ReqON: <nbsp>{{ mem.read('C' + (c_reqON|string)) }}</div>
+                    <div style="color: #00bfff;">ReqOFF: {{ mem.read('C' + (c_reqOFF|string)) }}</div>
+                    <div style="color: #00bfff;">QROff: {{ mem.read('DS' + (ds_QROff|string)) }}</div>
                 </div>
             </div>
             {% endfor %}
@@ -1092,14 +1061,24 @@ DASHBOARD_HTML = """
     </div>
 
     <div class="panel">
-        <h3>Schedule States (Current C1-C14 vs Previous C51-C64)</h3>
-        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 10px;">
-            {% for i in range(1, 14) %}
-            <div style="border: 1px solid #333; padding: 5px; text-align: center;">
-                <div class="label">SCH {{ i }}</div>
-                <div style="display: flex; justify-content: center; gap: 8px;">
-                    <div class="indicator {{ 'on' if mem.read('C'+(i|string)) else 'off' }}" title="Current"></div>
-                    <div class="indicator {{ 'prev-on' if mem.read('C'+((i+50)|string)) else 'off' }}" title="Previous"></div>
+        <h3>Schedule States (DS1051 - DS1062)</h3>
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px;">
+            {% for i in range(1, 13) %}
+            {% set ds_addr = 1050 + i %}
+            {% set state = mem.read('DS' + (ds_addr|string)) %}
+            <div style="border: 1px solid #333; padding: 10px; text-align: center; background: #0a0a0a; border-top: 3px solid {{ '#444' if state == 0 else '#00ff41' if state == 1 else '#00bfff' }};">
+                <div class="label" style="margin-bottom: 5px;">SCH {{ i }} (DS{{ ds_addr }})</div>
+                <div style="font-size: 1.1em; font-weight: bold; 
+                    color: {{ '#444' if state == 0 else '#00ff41' if state == 1 else '#00bfff' }};">
+                    {% if state == 0 %}
+                        OFF
+                    {% elif state == 1 %}
+                        AUTO
+                    {% elif state == 2 %}
+                        QR-EN
+                    {% else %}
+                        UNKNOWN ({{ state }})
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}
@@ -1177,16 +1156,19 @@ def toggle_step():
 
 @app.route('/step', methods=['POST'])
 def step():
+    logger.info("UI: Step" )
     shared_mem.step_trigger = True
     return wait_and_render(timeout=2.0)
 
 @app.route('/next_scan', methods=['POST'])
 def next_scan():
+    logger.info("UI: Next Scan" )
     shared_mem.scan_trigger = True
     return wait_and_render(timeout=2.0)
 
 @app.route('/reset_cycle', methods=['POST'])
 def reset_cycle():
+    logger.info("UI: Reboot" )
     # 1. Clear volatile memory based on config ranges
     shared_mem.clear_volatile_memory(shared_config)
     shared_mem.clear_errors()

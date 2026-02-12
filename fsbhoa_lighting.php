@@ -139,47 +139,44 @@ function fsbhoa_lighting_enqueue_scripts() {
         );
         
         // 4. Pass data to the main script
+        $options = get_option('fsbhoa_lighting_settings', []);
         $config_data = $common_data;
         $config_data['map_image_url'] = $map_url; // Add the map_url
+        $config_data['qr_duration'] = isset($options['qr_code_actuated_duration']) ? intval($options['qr_code_actuated_duration']) : 90;
+        $config_data['bluehost_qr_url'] = isset($options['bluehost_qr_url']) ? $options['bluehost_qr_url'] : 'https://fsbhoa.com/lights';
         wp_localize_script( 'fsbhoa-zone-manager', 'fsbhoa_lighting_data', $config_data );
     }
 
-    // For the schedules page
-    if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_schedules' ) ) {
-        // This page is now managed by the config page scripts
-    }
+    // --- Combined Monitor Enqueue (List and Map) ---
+    $current_content = is_a( get_post(), 'WP_Post' ) ? get_post()->post_content : '';
+    $has_list = has_shortcode( $current_content, 'lighting_status_monitor' );
+    $has_map  = has_shortcode( $current_content, 'lighting_map_monitor' );
 
-    // --- For the LIST monitor page ---
-    if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_status_monitor' ) ) {
-        wp_enqueue_script(
-            'fsbhoa-monitor-manager', 
-            plugin_dir_url( __FILE__ ) . 'assets/js/monitor-manager.js', 
-            array(), '1.0.0', true
-        );
-        // Only localize data for this script
-        wp_localize_script(
-            'fsbhoa-monitor-manager', 
-            'fsbhoa_lighting_data',
-            $common_data // It doesn't need the map_url
-        );
-    }
-    
-    // --- For the MAP monitor page ---
-    if ( is_a( get_post(), 'WP_Post' ) && has_shortcode( get_post()->post_content, 'lighting_map_monitor' ) ) {
-        wp_enqueue_script(
-            'fsbhoa-map-monitor', // New unique handle
-            plugin_dir_url( __FILE__ ) . 'assets/js/map-monitor.js', // New file
-            array(), '1.0.0', true
-        );
+    // If the page is the monitor slug OR contains either monitor shortcode
+    if ( is_page('lighting-monitor') || $has_list || $has_map ) {
         
-        // Pass the data it needs
-        $map_data = $common_data;
-        $map_data['map_image_url'] = $map_url; // Add the map_url
-        wp_localize_script(
-            'fsbhoa-map-monitor', 
-            'fsbhoa_lighting_data',
-            $map_data // Use the separate $map_data array
+        // Load List Monitor Script
+        wp_enqueue_script(
+            'fsbhoa-monitor-manager',
+            plugin_dir_url( __FILE__ ) . 'assets/js/monitor-manager.js',
+            array('jquery'),
+            '1.1.1',
+            true
         );
+        wp_localize_script('fsbhoa-monitor-manager', 'fsbhoa_lighting_data', $common_data);
+
+        // Load Map Monitor Script
+        wp_enqueue_script(
+            'fsbhoa-map-monitor',
+            plugin_dir_url( __FILE__ ) . 'assets/js/map-monitor.js',
+            array('jquery'),
+            '1.1.1',
+            true
+        );
+
+        $map_data = $common_data;
+        $map_data['map_image_url'] = $map_url;
+        wp_localize_script('fsbhoa-map-monitor', 'fsbhoa_lighting_data', $map_data);
     }
 }
 add_action( 'wp_enqueue_scripts', 'fsbhoa_lighting_enqueue_scripts' );
@@ -195,4 +192,5 @@ function fsbhoa_require_admin_globally() {
     }
 }
 add_action( 'template_redirect', 'fsbhoa_require_admin_globally' );
+
 

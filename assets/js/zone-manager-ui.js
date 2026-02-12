@@ -1,17 +1,34 @@
 // --- RENDER FUNCTIONS (Zones & Schedules) ---
 
-function renderZonesTable(container, saveBtn, allZones, allSchedules) {
+function formatPLCTime(val) {
+    if (!val) return "";
+    let hours = Math.floor(val / 100);
+    let mins = val % 100;
+    let ampm = hours >= 12 ? 'pm' : 'am';
+    hours = hours % 12;
+    hours = hours ? hours : 12; // the hour '0' should be '12'
+    let strMins = mins < 10 ? '0' + mins : mins;
+    return hours + ':' + strMins + ampm;
+}
+
+function renderZonesTable(container, saveBtn, allZones, allSchedules, liveStatus) {
+
     const tableRows = allZones.map(zone => {
         const assignedScheduleId = zone.schedule_id || 0;
+
+        
+        // Find if the assigned schedule has any QR-capable spans
+        const currentSchedule = allSchedules.find(s => s.id == assignedScheduleId);
+        const isQRProjected = currentSchedule && currentSchedule.spans.some(span => span.on_trigger.startsWith('QR_'));
+
         return `
             <tr>
                 <td><strong>${escapeHTML(zone.zone_name)}</strong></td>
                 <td>${escapeHTML(zone.description)}</td>
                 <td style="text-align: center; white-space: nowrap; width: 60px;">
-                    ${zone.is_timed == 1 ? `
-                        <a href="#" class="trigger-timer-link" data-zone-id="${zone.id}" title="Manually Start 90-Minute Timer" style="text-decoration:none; display: block; min-height: 20px;">
+                    ${isQRProjected ? `
+                        <a href="#" class="trigger-timer-link" data-zone-id="${zone.id}" title="Manually Start Timer" style="text-decoration:none; display: block; min-height: 20px;">
                             <span class="dashicons dashicons-clock" id="timer-icon-${zone.id}" style="color:#2271b1; font-size:18px; vertical-align:middle;"></span>
-                            <strong class="zone-timer-countdown" id="timer-zone-${zone.id}" style="color:#2271b1; font-family:monospace; font-size:14px; display:none;"></strong>
                         </a>
                     ` : ''}
                 </td>
@@ -22,7 +39,7 @@ function renderZonesTable(container, saveBtn, allZones, allSchedules) {
                     </select>
                 </td>
                 <td>
-                    ${zone.is_timed == 1 ? `<a href="#" class="generate-qr-link" data-zone-id="${zone.id}" title="Generate QR Code"><span class="dashicons dashicons-share"></span></a> | ` : ''}
+                    ${isQRProjected ? `<a href="#" class="generate-qr-link" data-zone-id="${zone.id}" title="Generate QR Code"><span class="dashicons dashicons-share"></span></a> | ` : ''}
                     <a href="#" class="edit-zone-link" data-zone-id="${zone.id}" title="Edit Zone" style="text-decoration: none;"><span class="dashicons dashicons-edit"></span></a> |
                     <a href="#" class="delete-zone-link" data-zone-id="${zone.id}" title="Delete Zone" style="color: #b32d2e; text-decoration: none;"><span class="dashicons dashicons-trash"></span></a>
                 </td>
@@ -53,21 +70,24 @@ async function renderZoneForm(formContainer, listContainer, addNewBtn, saveBtn, 
     const currentZones = await zonesRes.json();
 
     const mappingsChecklistHTML = allMappings.map(map => {
-        const isChecked = zone.mapping_ids && zone.mapping_ids.includes(map.id.toString());
+        const isChecked = zone.mapping_ids && zone.mapping_ids.map(String).includes(map.id.toString());
         let isDisabled = false;
         let assignedToZoneName = '';
+        
         for (const otherZone of currentZones) {
             if (otherZone.id === zone.id) continue;
-            if (otherZone.mapping_ids && otherZone.mapping_ids.includes(map.id.toString())) {
+            if (otherZone.mapping_ids && otherZone.mapping_ids.map(String).includes(map.id.toString())) {
                 isDisabled = true;
                 assignedToZoneName = otherZone.zone_name;
                 break;
             }
         }
+        
         let labelStyle = 'display: block; margin-bottom: 5px;';
         if (isDisabled) {
-            labelStyle += ' color: #999; cursor: not-allowed;'; // 2. Add disabled style
+            labelStyle += ' color: #999; cursor: not-allowed;';
         }
+        
         const disabledAttr = isDisabled ? 'disabled' : '';
         const tooltip = isDisabled ? `title="Already assigned to zone: '${escapeHTML(assignedToZoneName)}'"` : '';
         const outputsText = Array.isArray(map.plc_outputs) ? map.plc_outputs.join(', ') : '';
@@ -89,13 +109,6 @@ async function renderZoneForm(formContainer, listContainer, addNewBtn, saveBtn, 
                     <td><input name="description" type="text" id="description" value="${escapeHTML(zone.description || '')}" class="large-text"></td>
                 </tr>
                 <tr class="form-field">
-                    <th scope="row"><label for="is_timed">Timed Zone</label></th>
-                    <td>
-                        <input name="is_timed" type="checkbox" id="is_timed" value="1" ${zone.is_timed == 1 ? 'checked' : ''}>
-                        <p class="description">Enable QR code activation and PLC-based 90-minute timer for this zone.</p>
-                    </td>
-                </tr>
-                <tr class="form-field">
                     <th scope="row" style="vertical-align: top; padding-top: 12px;">Assign PLC Output Mappings</th>
                     <td style="padding-top: 10px;">${mappingsChecklistHTML || 'No mappings defined yet. Please add mappings below first.'}</td>
                 </tr>
@@ -115,13 +128,24 @@ function renderSchedulesTable(container, allSchedules) {
     const rows = allSchedules.map(s => {
         const spansSummary = s.spans.map(span => {
             const days = (span.days_of_week && span.days_of_week.length > 0) ? span.days_of_week.join(', ') : 'No days selected';
-            return `[${span.on_trigger === 'TIME' ? formatTime(span.on_time) : 'Sundown'} - ${span.off_trigger === 'TIME' ? formatTime(span.off_time) : 'Sunrise'}] on ${days}`;
+            // On Trigger Labeling
+            let onLabel = '';
+            if (span.on_trigger === 'TIME') onLabel = formatTime(span.on_time);
+            else if (span.on_trigger === 'SUNDOWN') onLabel = 'Sundown';
+            else if (span.on_trigger === 'QR_TIME') onLabel = `QR & ${formatTime(span.on_time)}`;
+            else if (span.on_trigger === 'QR_SUNDOWN') onLabel = 'QR & Sundown';
+
+            // Off Trigger Labeling
+            const offLabel = span.off_trigger === 'TIME' ? formatTime(span.off_time) : 'Sunrise';
+
+            return `[${onLabel} - ${offLabel}] on ${days}`;
         }).join('<br>');
         return `
             <tr>
                 <td><strong>${escapeHTML(s.schedule_name)}</strong></td>
                 <td>${spansSummary}</td>
                 <td>
+                    <a href="#" class="clone-schedule-link" data-schedule-id="${s.id}" title="Clone Schedule" style="text-decoration: none; margin-right: 5px;"><span class="dashicons dashicons-admin-page"></span></a>
                     <a href="#" class="edit-schedule-link" data-schedule-id="${s.id}" title="Edit Schedule" style="text-decoration: none;"><span class="dashicons dashicons-edit"></span></a> |
                     <a href="#" class="delete-schedule-link" data-schedule-id="${s.id}" title="Delete Schedule" style="color: #b32d2e; text-decoration: none;"><span class="dashicons dashicons-trash"></span></a>
                 </td>
@@ -155,17 +179,19 @@ function renderSpanRow(span = {}) {
             </div>
             <div style="display: flex; align-items: center; gap: 4px;">
                 <span style="font-weight: bold;">On:</span>
-                <select name="on_trigger" style="flex-shrink: 0; width: 100px; ${controlStyle}">
+                <select name="on_trigger" style="flex-shrink: 0; width: 140px; ${controlStyle}">
+                    <option value="TIME" ${span.on_trigger === 'TIME' ? 'selected' : ''}>Fixed Time</option>
                     <option value="SUNDOWN" ${span.on_trigger === 'SUNDOWN' ? 'selected' : ''}>Sundown</option>
-                    <option value="TIME" ${span.on_trigger === 'TIME' ? 'selected' : ''}>Time</option>
+                    <option value="QR_TIME" ${span.on_trigger === 'QR_TIME' ? 'selected' : ''}>QR & Time</option>
+                    <option value="QR_SUNDOWN" ${span.on_trigger === 'QR_SUNDOWN' ? 'selected' : ''}>QR & Sundown</option>
                 </select>
-                <input type="time" name="on_time" value="${span.on_time ? span.on_time.substring(0, 5) : ''}" style="${span.on_trigger !== 'TIME' ? 'display:none;' : ''} ${controlStyle}">
+                <input type="time" name="on_time" value="${span.on_time ? span.on_time.substring(0, 5) : ''}" style="${(span.on_trigger !== 'TIME' && span.on_trigger !== 'QR_TIME') ? 'display:none;' : ''} ${controlStyle}">
             </div>
             <div style="display: flex; align-items: center; gap: 4px;">
                  <span style="font-weight: bold;">Off:</span>
-                <select name="off_trigger" style="flex-shrink: 0; width: 100px; ${controlStyle}">
+                <select name="off_trigger" style="flex-shrink: 0; width: 110px; ${controlStyle}">
                     <option value="SUNRISE" ${span.off_trigger === 'SUNRISE' ? 'selected' : ''}>Sunrise</option>
-                    <option value="TIME" ${span.off_trigger === 'TIME' ? 'selected' : ''}>Time</option>
+                    <option value="TIME" ${span.off_trigger === 'TIME' ? 'selected' : ''}>Fixed Time</option>
                 </select>
                 <input type="time" name="off_time" value="${span.off_time ? span.off_time.substring(0, 5) : ''}" style="${span.off_trigger !== 'TIME' ? 'display:none;' : ''} ${controlStyle}">
              </div>
@@ -210,6 +236,96 @@ function renderScheduleForm(formContainer, listContainer, addNewBtn, schedule = 
     formContainer.style.display = 'block';
 };
 
+/**
+ * Shared logic to determine bulb status based on physical state and schedule.
+ * Returns { class: string, tooltip: string }
+ */
+const calculateBulbStatus = (map, allZones, liveStatus) => {
+    // 1. Find the Zone
+    let isSchedActive = false;
+    let isQRReady = false;
+    const zone = allZones.find(z => {
+        if (!z.mapping_ids || !Array.isArray(z.mapping_ids)) return false;
+        return z.mapping_ids.some(mId => String(mId) === String(map.id));
+    });
+
+    // Get the specific QR timer for this zone if it exists
+    const qroffTime = zone ? liveStatus[`qroff_zone_${zone.id}`] : 0;
+
+    if (zone) {
+        const sStatus = liveStatus[`Sched${zone.schedule_id}`];
+        if (sStatus === 1 || sStatus === true) isSchedActive = true;
+        else if (sStatus === 2) isQRReady = true;
+    }
+// --- Troubleshooting QR Status ---
+//    console.log(`--- QR Logic Check: ${map.description} ---`);
+//    console.log(`  - map.id:  ${map.id}`);
+//    console.log(`  - Zone ID: ${zone ? zone.id : 'NONE'}`);
+//    console.log(`  - Looking for Key: qroff_zone_${zone ? zone.id : '?'}`);
+//    console.log(`  - Value found in liveStatus:`, qroffTime);
+//    console.log(`  - isSchedActive: ${isSchedActive}`);
+//    console.log(`  - isQRReady: ${isQRReady}`);
+
+
+    // 2. Process PLC Outputs & Generate Badges
+    let monitoredOn = 0;
+    let outputBadges = '';
+    
+    if (Array.isArray(map.plc_outputs)) {
+        outputBadges = map.plc_outputs.map(out => {
+            const key = `PLC${map.plc_id}-${out}`;
+            const val = liveStatus[key];
+            const isOn = (val === true || val === 1);
+            
+            if (isOn) monitoredOn++;
+
+            // Style: Green border/text if ON, standard gray if OFF
+            const style = isOn 
+                ? "border:1px solid #46b450; color:#46b450; background:#f0fff0;" 
+                : "border:1px solid #ccc; color:#333; background:#f0f0f1;";
+
+            return `<span style="display:inline-block; margin-right:3px; padding:1px 4px; border-radius:2px; font-family:monospace; font-size:11px; ${style}">${out}</span>`;
+        }).join(' ');
+    }
+
+    // 3. Determine Bulb Class
+    let resClass = 'status-auto-off';
+    let resTooltip = 'OFF';
+
+    if (monitoredOn > 0) {
+        // LIGHT IS ON
+        if (isSchedActive) {
+            resClass = 'status-auto-on'; // Yellow
+            resTooltip = 'ON (Scheduled)';
+        } else if (qroffTime > 0) {
+            // NEW LOGIC: Even if Sched is 2 (Armed), 
+            // the presence of a QROff time means it's currently TIMED ON.
+            resClass = 'status-auto-on'; // Yellow
+            resTooltip = `ON (QR Timer ends ${formatPLCTime(qroffTime)})`;
+        } else {
+            resClass = 'status-manual-on'; // Red-ish
+            resTooltip = 'ON (Manual Override)';
+        }
+    } else {
+        if (isSchedActive) {
+            resClass = 'status-manual-off'; // Blue
+            resTooltip = 'OFF (Should be ON)';
+        } else if (isQRReady) {
+            resClass = 'status-auto-off'; // Gray
+            resTooltip = 'QR Armed';
+        }
+    }
+
+    return { 
+        class: resClass, 
+        tooltip: resTooltip, 
+        badges: outputBadges,
+        monitoredOn: monitoredOn // helpful for logic elsewhere
+    };
+};
+
+
+
 function renderMappingsTable(container, allMappings, allZones, liveStatus) {
     // --- Sort Logic ---
     allMappings.sort((a, b) => {
@@ -230,41 +346,9 @@ function renderMappingsTable(container, allMappings, allZones, liveStatus) {
     });
 
     const tableRows = allMappings.map(map => {
-        // --- 1. Schedule Logic ---
-        let isSchedActive = false;
-        if (map.linked_zone_ids && map.linked_zone_ids.length > 0) {
-            const zoneId = map.linked_zone_ids[0];
-            const zone = allZones.find(z => z.id == zoneId);
-            if (zone && liveStatus[`Sched${zone.schedule_id}`] === true) {
-                isSchedActive = true;
-            }
-        }
+        const status = calculateBulbStatus(map, allZones, liveStatus);
 
-        // --- 2. Output Badges (Clean Gray Version) ---
-        let monitoredOn = 0;
-        let outputBadges = '';
-        if (Array.isArray(map.plc_outputs)) {
-            outputBadges = map.plc_outputs.map(out => {
-                const key = `PLC${map.plc_id}-${out}`;
-                if (liveStatus[key] === true) monitoredOn++;
-                
-                // Compact gray badge
-                return `<span style="display:inline-block; margin-right:3px; background:#f0f0f1; border:1px solid #ccc; padding:1px 4px; border-radius:2px; font-family:monospace; font-size:11px; color:#333;">${out}</span>`;
-            }).join(' ');
-        }
-
-        // --- 3. Bulb Color Logic ---
-        let mainClass = '';
-        let mainTooltip = '';
-
-        if (monitoredOn > 0) {
-            mainClass = isSchedActive ? 'status-auto-on' : 'status-manual-on';
-            mainTooltip = 'ON';
-        } else {
-            mainClass = isSchedActive ? 'status-manual-off' : 'status-auto-off';
-            mainTooltip = 'OFF';
-        }
-        const mainBulb = `<span class="dashicons dashicons-lightbulb monitor-bulb ${mainClass}" title="${mainTooltip}" style="margin-right:8px; font-size:18px; width:18px; height:18px;"></span>`;
+        const mainBulb = `<span class="dashicons dashicons-lightbulb monitor-bulb ${status.class}" title="${status.tooltip}" style="margin-right:8px; font-size:18px; width:18px; height:18px;"></span>`;
 
         return `
         <tr>
@@ -275,7 +359,7 @@ function renderMappingsTable(container, allMappings, allZones, liveStatus) {
                     <strong>${escapeHTML(map.description)}</strong>
                 </div>
             </td>
-            <td>${outputBadges}</td>
+            <td><div class="badge-container">${status.badges}</div></td>
             <td>${Array.isArray(map.relays) ? map.relays.join(', ') : ''}</td>
             <td style="white-space:nowrap;">
                 <div style="display: flex; align-items: center; gap: 3px;">

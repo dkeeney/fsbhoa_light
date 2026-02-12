@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let burstEndTime = 0;              // Timestamp when Turbo ends
     let isUpdating = false;
     let loopTimerId = null;
+    let allSchedules = [];
 
     const api = {
         getStatus: () => fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/status', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } }),
@@ -36,6 +37,23 @@ document.addEventListener('DOMContentLoaded', function () {
         // If we aren't currently updating, we will naturally pick up the speed on the next loop.
     };
 
+    const formatQROffTime = (rawTime) => {
+        if (!rawTime || rawTime <= 0) return '';
+        const hours = Math.floor(rawTime / 100);
+        const minutes = rawTime % 100;
+    
+        // Format to 12-hour time (e.g., 6:30 PM)
+        const period = hours >= 12 ? 'PM' : 'AM';
+        const displayHours = hours % 12 || 12;
+        const displayMinutes = minutes < 10 ? '0' + minutes : minutes;
+    
+        return `${displayHours}:${displayMinutes} ${period}`;
+    };
+
+    // Here is a sample of what the Go Service returns from the status poll:
+    //  $ curl http://localhost:8085/status
+    // {"PLC1-Y101":false,"PLC1-Y103":false,"PLC1-Y105":false,"PLC1-Y107":false,"PLC1-Y109":false,"PLC1-Y111":false,"PLC1-Y113":false,"PLC1-Y115":false,"PLC1-Y201":false,"PLC1-Y203":false,"PLC1-Y205":false,"PLC1-Y207":false,"PLC1-Y209":false,"PLC1-Y211":false,"PLC1-Y213":false,"PLC1-Y215":false,"PLC1-Y301":false,"PLC1-Y303":false,"PLC1-Y305":false,"PLC1-Y307":false,"PLC1-Y309":false,"PLC1-Y311":false,"PLC1-Y313":false,"PLC1-Y315":false,"PLC2-Y101":false,"PLC2-Y103":false,"PLC2-Y105":false,"PLC2-Y107":false,"PLC2-Y109":false,"PLC2-Y111":false,"PLC2-Y113":false,"PLC2-Y115":false,"PLC2-Y201":false,"PLC2-Y203":false,"PLC2-Y205":false,"PLC2-Y207":false,"PLC2-Y209":false,"PLC2-Y211":false,"PLC2-Y213":false,"PLC2-Y215":false,"Photocell":false,"Sched10":1,"Sched11":1,"Sched12":1,"Sched4":1,"Sched5":0,"Sched6":1,"Sched7":1,"Sched8":0,"Sched9":1,"schedule_map_1":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"schedule_map_2":[0,5,0,0,0,5,0,5,0,11,0,5,0,11,0,0,0,11,0,5,0,5,0,4]}
+
     const renderStatus = (status) => {
         if (zoneData.length === 0 || mappingData.length === 0) {
             statusContainer.innerHTML = '<p>Loading configuration...</p>';
@@ -43,53 +61,93 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const rows = zoneData.map(zone => {
-            // 1. Find mappings and calculate if lights are physically ON
-            const zoneMappings = mappingData.filter(m => zone.mapping_ids.includes(m.id));
+            // 1. Fetch Schedule & QR Status from Go Service
+            const schedStatus = status[`Sched${zone.schedule_id}`] || 0;
+            const qroffValue = status[`qroff_zone_${zone.id}`] || 0;
+
+            // hasTimedCapability means the Go Service 
+            // is currently processing a QR-based span for this zone.
+            // SchedStatus 2 = QR span is active but light is physically off.
+            // SchedStatus 1 with qroffValue > 0 = QR span is active and light is on.
+            const hasTimedCapability = (schedStatus === 2) || (schedStatus === 1 && qroffValue > 0);
+
+            // 2. Identify Mappings (Physical Lights)
+            const zoneMappings = mappingData.filter(m => 
+                zone.mapping_ids && zone.mapping_ids.map(String).includes(String(m.id))
+            );
+
             let totalLights = 0;
             let lightsOn = 0;
 
             zoneMappings.forEach(mapping => {
-                if (mapping.plc_outputs && mapping.plc_outputs.length > 0) {
-                    const output = mapping.plc_outputs[0];
+                // Each mapping is ONE light: [On-Trigger, Off-Trigger]
+                if (Array.isArray(mapping.plc_outputs) && mapping.plc_outputs.length > 0) {
                     totalLights++;
-                    const uniqueKey = `PLC${mapping.plc_id}-${output}`;
-                    if (status[uniqueKey] === true) lightsOn++;
+                    const onTrigger = mapping.plc_outputs[0];
+                    const uniqueKey = `PLC${mapping.plc_id}-${onTrigger}`;
+                    const val = status[uniqueKey];
+
+                    if (val === true || val === 1) {
+                        lightsOn++;
+                    }
                 }
             });
+            
 
-            // 2. Schedule and Timer Logic
-            const isSchedActive = status[`Sched${zone.schedule_id}`] === true;
-            const remaining = status[`timer_zone_${zone.id}`] || 0;
+            // 3. Determine Color Class & Tooltip
+            //  Blue is now reserved strictly for when schedStatus === 1 
+            //  (The Go service is actively trying to hold the light ON) but the light is OFF.
+            //
+            //  Gray now covers both the "Default Off" and the "QR Armed" state, which feels 
+            //  much more natural for the user.
+            //
+            //  The Clock Icon will stay visible in that "QR Armed" and Gray state, providing 
+            //  the visual hint that it can be turned on.
 
-            // 3. Determine Color Class
-            let statusClass = '';
-            let tooltip = '';
+            let statusClass = 'status-auto-off'; // Default Gray
+            let tooltip = 'Off';
             const isActuallyOn = lightsOn > 0;
+            const isPartial = isActuallyOn && lightsOn < totalLights;
 
-            if (isActuallyOn) {
-                statusClass = isSchedActive ? 'status-auto-on' : 'status-manual-on';
-                tooltip = isSchedActive ? 'Auto ON (Schedule)' : 'Manual ON (Override)';
-            } else {
-                statusClass = isSchedActive ? 'status-manual-off' : 'status-auto-off';
-                tooltip = isSchedActive ? 'Manual OFF (Override)' : 'Off';
-            }
-
-            if (isActuallyOn && lightsOn < totalLights) {
-                statusClass += ' status-pulsing';
-                tooltip += ` - PARTIAL (${lightsOn}/${totalLights})`;
-            }
-
-            // 4. State Column: Bulb + (Clock or Minutes) - Fixed Wrapping
-            let timerHtml = '';
-            if (zone.is_timed == 1) {
-                if (remaining > 0) {
-                    // Show minutes
-                    timerHtml = `<strong style="font-size:11px; color:#2271b1; font-family:monospace; margin-left:6px;">${remaining}m</strong>`;
+            if (isPartial) {
+                statusClass = 'status-partial status-pulsing';
+                tooltip = `PARTIAL ERROR: ${lightsOn}/${totalLights} ON`;
+            } 
+            else if (isActuallyOn) {
+                if (schedStatus === 1 || qroffValue > 0) {
+                    statusClass = 'status-auto-on'; // Yellow
+                    tooltip = qroffValue > 0 ? 'QR Timer Active' : 'Schedule Active';
                 } else {
-                    // Show clock icon when idle
-                    timerHtml = `<span class="dashicons dashicons-clock" style="color:#ccc; font-size:17px; margin-left:6px; vertical-align:middle;" title="Timed Zone Idle"></span>`;
+                    statusClass = 'status-manual-on'; // Red-Orange
+                    tooltip = 'Manual Override ON';
+                }
+            } 
+            else {
+                // Light is PHYSICALLY OFF
+                if (schedStatus === 2) {
+                    // If Go says it's in QR mode (2), 
+                    // it's not a "Manual Off" error, it's just waiting.
+                    statusClass = 'status-auto-off'; // Gray
+                    tooltip = qroffValue > 0 ? 'QR Timer Running (Waiting for Sundown/Range)' : 'QR Armed (Ready to Scan)';
+                } else if (schedStatus === 1) {
+                    // Only show Blue if it's a standard "Should be ON" span
+                    statusClass = 'status-manual-off'; // Blue
+                    tooltip = 'Manual OFF (Override)';
+                } else {
+                    statusClass = 'status-auto-off'; // Gray
+                    tooltip = 'Off';
                 }
             }
+
+            // 4. State Column: Bulb + Expiration/Clock
+            let timerHtml = '';
+            if (qroffValue > 0) {
+                const formattedTime = formatQROffTime(qroffValue);
+                timerHtml = `<strong style="font-size:10px; color:#2271b1; font-family:monospace; margin-left:6px; border: 1px solid #d1ecf1; padding: 1px 3px; border-radius: 3px; background: #f8fdff;" title="Timer Expiration">Exp: ${formattedTime}</strong>`;
+            } else if (hasTimedCapability) {
+                timerHtml = `<span class="dashicons dashicons-clock" style="color:#ccc; font-size:17px; margin-left:6px; vertical-align:middle;" title="QR Trigger Available"></span>`;
+            }
+
 
             // Use flexbox to keep them on the same row and centered
             const statusDisplay = `
@@ -109,9 +167,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 <a href="#" class="${offLinkClasses}" data-zone-id="${zone.id}" data-state="off">OFF</a>
             `;
 
-            const schedBadge = isSchedActive
-                ? '<span style="color:#46b450; font-weight:bold; font-size:11px;">ACTIVE</span>'
-                : '<span style="color:#ccc; font-size:11px;">Inactive</span>';
+            // 6. Schedule Badge Column (Using schedStatus instead of isSchedActive)
+            let schedBadge = '<span style="color:#ccc; font-size:11px;">Inactive</span>';
+            if (schedStatus === 1) {
+                schedBadge = '<span style="color:#46b450; font-weight:bold; font-size:11px;">ACTIVE</span>';
+            } else if (schedStatus === 2) {
+                schedBadge = '<span style="color:#2271b1; font-weight:bold; font-size:11px;">QR ENABLED</span>';
+            }
 
             return `
                 <tr>
@@ -128,8 +190,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // --- Photocell and Header Logic ---
         const photocellStatus = status['Photocell'] === true
-            ? '<span style="color: #333; font-weight: bold;">DARK</span> (Lights enabled)'
-            : '<span style="color: orange; font-weight: bold;">LIGHT</span> (Lights disabled by daylight)';
+            ? '<span style="color: #333; font-weight: bold;">NIGHT</span> (Sundown Active)'
+            : '<span style="color: orange; font-weight: bold;">DAY</span> (Waiting for Sundown)';
 
         const isBursting = typeof burstEndTime !== 'undefined' && Date.now() < burstEndTime;
         const refreshRate = isBursting ? "Turbo (0.2s)" : "2s";
@@ -223,13 +285,23 @@ document.addEventListener('DOMContentLoaded', function () {
             // ---------------------------------------------
 
             if (!statusRes.ok) throw new Error(`Status API Error`);
+
+            //console.log("RAW GO SERVICE STATUS:", status);
+
             const status = await statusRes.json();
 
             if (forceConfig || zoneData.length === 0) {
-                const [zonesRes, mappingsRes] = await Promise.all([api.getZones(), api.getMappings()]);
-                if (zonesRes.ok && mappingsRes.ok) {
+                // UPDATE: Added api.getSchedules() to the Promise.all
+                const [zonesRes, mappingsRes, schedulesRes] = await Promise.all([
+                    api.getZones(), 
+                    api.getMappings(),
+                    fetch(fsbhoa_lighting_data.rest_url + 'fsbhoa-lighting/v1/schedules', { headers: { 'X-WP-Nonce': fsbhoa_lighting_data.nonce } })
+                ]);
+
+                if (zonesRes.ok && mappingsRes.ok && schedulesRes.ok) {
                     zoneData = await zonesRes.json();
                     mappingData = await mappingsRes.json();
+                    allSchedules = await schedulesRes.json(); 
                 }
             }
             if (statusRes.ok) renderStatus(status);

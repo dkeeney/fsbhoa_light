@@ -1,0 +1,425 @@
+<?php
+/**
+ * Plugin Name: FSBHOA Remote Lighting (Bluehost)
+ * Description: Handles court lighting requests via QR Code (Auto-Trigger).
+ * Version: 1.2
+ * Author: FSBHOA IT Committee
+ * Install with a shortcode: [court_lights]
+ */
+
+defined( 'ABSPATH' ) or die( 'Unauthorized Access' );
+
+define( 'FSBHOA_REMOTE_URL', plugin_dir_url( __FILE__ ) );
+
+/**
+ * 1. Database Setup (Same as before)
+ */
+function fsbhoa_remote_lighting_install() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'lighting_queue';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE $table_name (
+        id mediumint(9) NOT NULL AUTO_INCREMENT,
+        zone_id mediumint(9) NOT NULL,
+        user_email varchar(100) NOT NULL,
+        status varchar(20) DEFAULT 'pending',
+        created_at datetime DEFAULT CURRENT_TIMESTAMP,
+        updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY  (id)
+    ) $charset_collate;";
+
+    require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
+    dbDelta( $sql );
+}
+register_activation_hook( __FILE__, 'fsbhoa_remote_lighting_install' );
+
+/**
+ * Register the Assets early so they are ready for the shortcode
+ */
+function fsbhoa_register_lighting_assets() {
+    // 1. Register the JS file
+    wp_register_script(
+        'fsbhoa-remote-js',
+        FSBHOA_REMOTE_URL . 'assets/lighting-remote.js',
+        array('jquery'), // Depends on jQuery
+        '1.4',           // Version (increment this to bust browser cache)
+        true             // Load in footer
+    );
+
+    // 2. Localize it (Pass PHP data to the JS file)
+    wp_localize_script( 'fsbhoa-remote-js', 'fsbhoa_vars', array(
+        'ajax_url'         => admin_url( 'admin-ajax.php' ),
+        'nonce'            => wp_create_nonce( 'fsbhoa_light_req_nonce' )
+        /////'success_redirect' => home_url('/lights/?finished=1')
+    ));
+}
+add_action( 'wp_enqueue_scripts', 'fsbhoa_register_lighting_assets' );
+
+
+
+
+
+// STAGE 1 REDIRECT (Handles the initial scan BEFORE the page loads)
+function fsbhoa_handle_qr_redirects() {
+    if ( ! is_page('lights') ) return; // Ensure 'lights' matches your page slug
+
+    $zone_id = isset($_GET['zone_id']) ? intval($_GET['zone_id']) : 0;
+    $step    = isset($_GET['step']) ? intval($_GET['step']) : 1;
+
+    if ( $step === 1 && $zone_id > 0 ) {
+        // Cookie Sweeper
+        if ( !empty($_COOKIE) ) {
+            foreach ( $_COOKIE as $name => $value ) {
+                if ( strpos($name, 'fsbhoa_token_') === 0 ) {
+                    setcookie($name, '', time() - 3600, "/");
+                }
+            }
+        }
+
+        $scan_id = time();
+        setcookie("fsb_token_" . $scan_id, 'unused', time() + 1800, "/");
+
+        $url = add_query_arg(array('zone_id' => $zone_id, 'scan_id' => $scan_id, 'step' => 2), get_permalink());
+        wp_redirect($url);
+        exit;
+    }
+}
+add_action('template_redirect', 'fsbhoa_handle_qr_redirects');
+
+
+/**
+ * STAGE 2 & 3: UI RENDERER
+ */
+function fsbhoa_render_auto_trigger( $atts ) {
+    $zone_id = isset($_GET['zone_id']) ? intval($_GET['zone_id']) : 0;
+    $step    = isset($_GET['step']) ? intval($_GET['step']) : 2;
+    $status  = isset($_GET['status']) ? sanitize_key($_GET['status']) : '';
+
+    // Stage 3: Finished Result
+    if ( isset($_GET['finished']) ) {
+        return fsbhoa_render_finished_ui($status);
+    }
+
+    // Stage 2: The Gate & Spinner
+    if ( $step === 2 ) {
+        $scan_id = isset($_GET['scan_id']) ? intval($_GET['scan_id']) : 0;
+        $cookie_name = "fsbhoa_token_" . $scan_id;
+
+        if ( ! is_user_logged_in() ) {
+            return fsbhoa_render_login_required_ui();
+        }
+
+        if ( $scan_id === 0 || !isset($_COOKIE[$cookie_name]) || $_COOKIE[$cookie_name] === 'spent' ) {
+            return fsbhoa_render_expired_ui();
+        }
+
+        // Mark ticket spent and show spinner
+        setcookie($cookie_name, 'spent', time() + 1800, "/");
+        wp_enqueue_script('fsbhoa-remote-js'); // Ensure this matches your registered name
+        return fsbhoa_render_spinner_ui($zone_id);
+    }
+
+    return '<p style="text-align:center;">Invalid Request.</p>';
+}
+add_shortcode( 'court_lights', 'fsbhoa_render_auto_trigger' );
+
+
+
+// 3. THE SHORTCODE [court_lights]
+function fsbhoa_render_court_lights($atts) {
+    $zone_id = isset($_GET['zone_id']) ? intval($_GET['zone_id']) : 0;
+    $status  = isset($_GET['status']) ? sanitize_key($_GET['status']) : '';
+    
+    // STAGE 3: Final Result Screen
+    if ( isset($_GET['finished']) ) {
+        return fsbhoa_render_finished_ui($status);
+    }
+
+    // STAGE 2: Spinner & Gate
+    $scan_id = isset($_GET['scan_id']) ? intval($_GET['scan_id']) : 0;
+    $cookie_name = "fsbhoa_token_" . $scan_id;
+
+    if ( ! is_user_logged_in() ) {
+        return '<h2>🔐 Login Required</h2><p>Please log in to use court lights.</p>';
+    }
+
+    if ( $scan_id === 0 || !isset($_COOKIE[$cookie_name]) || $_COOKIE[$cookie_name] === 'spent' ) {
+        return '<h2>⏳ Session Expired</h2><p>Please re-scan the QR code.</p>';
+    }
+
+    // Burn token and show spinner
+    setcookie($cookie_name, 'spent', time() + 1800, "/");
+    wp_enqueue_script('fsbhoa-remote-js');
+    
+    ob_start(); ?>
+    <div class="fsbhoa-auto-trigger" data-zone-id="<?php echo $zone_id; ?>" style="text-align:center;">
+        <h3>Activating Zone #<?php echo $zone_id; ?></h3>
+        <div class="spinner" style="border:4px solid #f3f3f3; border-top:4px solid #3498db; border-radius:50%; width:40px; height:40px; animation:spin 1s linear infinite; margin:20px auto;"></div>
+        <div class="fsbhoa-status-msg">Contacting Controller...</div>
+        <style>@keyframes spin { 0% { transform:rotate(0deg); } 100% { transform:rotate(360deg); } }</style>
+    </div>
+    <?php return ob_get_clean();
+}
+add_shortcode('court_lights', 'fsbhoa_render_court_lights');
+
+
+
+
+// 4. UI HELPER FOR STAGE 3
+function fsbhoa_render_finished_ui($status) {
+    $msg = "Access Denied";
+    $icon = "❌";
+
+    if ($status === 'success') { $msg = "Lights are ON!"; $icon = "✅"; }
+    if ($status === 'outside_qr_window') { $msg = "Too Early for Lights"; $icon = "☀️"; }
+    if ($status === 'qr_not_available') { $msg = "QR Not Enabled for this Zone"; $icon = "🚫"; }
+
+    return "<div style='text-align:center; padding:40px;'><h1>$icon</h1><h2>$msg</h2><p>Status: $status</p></div>";
+}
+
+
+/**
+ * 2. Auto-Trigger Shortcode
+ * Usage on Page: [court_lights]
+ * The URL determines the court from the zone: https://fsbhoa.com/lights/?zone_id=5,step=1
+ */
+function fsbhoa_render_auto_trigger( $atts ) {
+    $zone_id = isset($_GET['zone_id']) ? intval($_GET['zone_id']) : 0;
+    $step    = isset($_GET['step']) ? intval($_GET['step']) : 1;
+    $status  = isset($_GET['status']) ? sanitize_key($_GET['status']) : '';
+
+    // --- Check for STAGE 3: SUCCESS / REJECTED UI ---
+    // (Check this first so finished states don't trigger stage 1/2 logic)
+    if ( isset($_GET['finished']) ) {
+        return fsbhoa_render_finished_ui($status);
+    }
+
+    // --- ERROR CHECK: No Zone ---
+    if ( $zone_id === 0 && !isset($_GET['status']) ) {
+        error_log("FSBHOA DEBUG: Failed at Start - No Zone ID provided.");
+        return '<p style="color:red; text-align:center;">Error: No valid zone specified.</p>';
+    }
+
+    // ==========================================
+    // STAGE 1: INITIAL QR SCAN (Set the Ticket)
+    // ==========================================
+    if ( $step === 1 ) {
+        // Discard old cookies
+        if ( !empty($_COOKIE) ) {
+            foreach ( $_COOKIE as $name => $value ) {
+                // If the cookie name starts with our prefix, expire it
+                if ( strpos($name, 'fsbhoa_token_') === 0 ) {
+                    // To delete a cookie, set its expiration to the past
+                    setcookie($name, '', time() - 3600, "/");
+                }
+            }
+        }
+
+        // Set the cookie to 'unused'. Valid for 30 minutes.
+        $scan_id = time();
+        $cookie_name = "fsbhoa_token_" . $scan_id;
+        setcookie($cookie_name, 'unused', time() + 1800, "/");
+        
+        // Redirect to Stage 2
+        $redirect_url = add_query_arg( array(
+            'zone_id' => $zone_id,
+            'scan_id' => $scan_id,
+            'step'    => 2
+        ), get_permalink() );
+error_log("FSBHOA DEBUG: Stage 1 redirect to " . $redirect_url);
+
+
+        // USE JAVASCRIPT FOR REDIRECT INSTEAD OF wp_redirect/exit
+        return '
+        <div style="text-align:center; padding:50px;">
+            <p>Redirecting to Secure Gate...</p>
+            <script>window.location.href="' . esc_url_raw($redirect_url) . '";</script>
+            <noscript><meta http-equiv="refresh" content="0;url=' . esc_url($redirect_url) . '"></noscript>
+        </div>';
+    }
+
+    // ==========================================
+    // STAGE 2: THE SECURITY & TRIGGER GATE
+    // ==========================================
+    if ( $step === 2 ) {
+        $scan_id = isset($_GET['scan_id']) ? intval($_GET['scan_id']) : 0;
+        $cookie_name = "fsbhoa_token_" . $scan_id;
+error_log("FSBHOA DEBUG: Stage 2 reached for Zone ID: " . $zone_id);
+        // A. LOGIN CHECK
+        if ( ! is_user_logged_in() ) {
+            return '
+                <div style="text-align:center; padding:40px;">
+                    <div style="font-size: 50px;">🔐</div>
+                    <h2>Login Required</h2>
+                    <p>You must be logged into the FSBHOA website to control the lights.</p>
+                    <a href="'.home_url('/log-in/').'" class="button" style="display:inline-block; background:#3498db; color:#fff; padding:15px 30px; border-radius:5px; text-decoration:none;">
+                        Log In Here
+                    </a>
+                    <p style="margin-top:20px; font-size:0.9em; color:#666;">
+                        After logging in, please return to the court and <strong>re-scan the QR code</strong>.
+                    </p>
+                </div>';
+        }
+
+        // B. BACK-BUTTON TRAP: Check if cookie is missing or 'spent'
+        // If the serial number is 0, or the cookie is missing, or it's 'spent'
+        if ( $scan_id === 0 || !isset($_COOKIE[$cookie_name]) || $_COOKIE[$cookie_name] === 'spent' ) {
+            // Land here if they hit "Back" from the Success page
+            error_log("FSBHOA DEBUG: Cookie check failed or spent. Showing Expired UI.");
+            return fsbhoa_render_expired_ui();
+        }
+
+        // C. BURN THE TICKET: Mark as spent BEFORE showing the spinner
+        setcookie($cookie_name, 'spent', time() + 1800, "/");
+
+ error_log("FSBHOA DEBUG: Passing Zone " . $zone_id . " to UI spinner.");
+        // D. LOAD SCRIPTS & SPINNER
+        wp_enqueue_script('fsbhoa-remote-js'); // Make sure it's registered
+        return fsbhoa_render_spinner_ui($zone_id);
+    }
+
+    // ==========================================
+    // STAGE 3: SUCCESS / REJECTED UI
+    // ==========================================
+    if ( isset($_GET['finished']) ) {
+        return fsbhoa_render_finished_ui($status);
+    }
+}
+add_shortcode( 'court_lights', 'fsbhoa_render_auto_trigger' );
+
+
+/**
+ * Renders the "Activating..." Spinner (Stage 2 UI)
+ */
+function fsbhoa_render_spinner_ui($zone_id) {
+    ob_start(); ?>
+    <div class="fsbhoa-auto-trigger" data-zone-id="<?php echo $zone_id; ?>" style="text-align: center; padding: 20px;">
+        <h3>Activating Zone #<?php echo $zone_id; ?></h3>
+        <div class="fsbhoa-loader" style="margin: 20px 0;">
+            <div style="border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+        </div>
+        <div class="fsbhoa-status-msg">Connecting to Lighting Controller...</div>
+        <style>@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
+    </div>
+    <?php return ob_get_clean();
+}
+
+/**
+ * Renders the Final Success/Error Screen (Stage 3)
+ */
+function fsbhoa_render_finished_ui($status) {
+    ob_start(); ?>
+    <div style="text-align:center; padding:30px;">
+        <?php if ( $status === 'success' ): ?>
+            <div style="font-size: 60px; color: green;">&#10003;</div>
+            <h2>Lights are ON!</h2>
+            <p>Timer is started. Lights are on when dark within 5am to 10pm.</p>
+
+        <?php elseif ( $status === 'outside_qr_window' ): ?>
+            <div style="font-size: 60px;">☀️</div>
+            <h2>Too Early for Lights</h2>
+            <p>QR activation is only available during scheduled night hours within 5am to 10pm.</p>
+
+        <?php elseif ( $status === 'qr_not_available' || $status === 'schedule_not_found' ): ?>
+            <div style="font-size: 60px;">🚫</div>
+            <h2>QR Not Enabled</h2>
+            <p>This zone is not currently configured for QR code activation. Please contact the IT Committee if you believe this is an error.</p>
+
+        <?php else: ?>
+            <div style="font-size: 60px; color: red;">&#10007;</div>
+            <h2>Access Denied</h2>
+            <p>We could not activate the lights. (Status: <?php echo esc_html($status); ?>)</p>
+        <?php endif; ?>
+        
+        <p style="margin-top:20px; font-size: 0.8em; color: #999;">Session Ended. You may close the tab.</p>
+    </div>
+    <?php return ob_get_clean();
+}
+
+/**
+ * Renders the Expired Screen (The Back-Button Trap)
+ */
+function fsbhoa_render_expired_ui() {
+    return '
+    <div style="text-align:center; padding:40px;">
+        <div style="font-size: 50px;">⏳</div>
+        <h2>Session Expired</h2>
+        <p>For security, you must re-scan the QR code to trigger the lights again.</p>
+        <a href="'.home_url().'">Return to Home</a>
+    </div>';
+}
+
+/**
+ * 3. Request Handler
+ */
+function fsbhoa_handle_light_request() {
+    check_ajax_referer( 'fsbhoa_light_req_nonce', 'nonce' );
+
+    $zone_id = isset($_POST['zone_id']) ? intval($_POST['zone_id']) : 0;
+    $current_user = wp_get_current_user();
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'lighting_queue';
+
+    // --- GATEKEEPER LOGIC ---
+    // Check if this user already has a pending/processing job OR a success in the last 2 minutes
+    $existing_job = $wpdb->get_row( $wpdb->prepare( "
+        SELECT id, status FROM $table_name 
+        WHERE zone_id = %d 
+        AND user_email = %s 
+        AND (status IN ('pending', 'processing') 
+             OR (status = 'success' AND updated_at > DATE_SUB(NOW(), INTERVAL 2 MINUTE)))
+        ORDER BY created_at DESC LIMIT 1
+    ", $zone_id, $current_user->user_email ) );
+
+    if ( $existing_job ) {
+        // If it's already success, tell the JS to go straight to the finished screen
+        // If it's pending/processing, return the EXISTING job_id so we don't duplicate
+        wp_send_json_success( array( 
+            'job_id' => $existing_job->id, 
+            'status' => $existing_job->status,
+            'reused' => true 
+        ) );
+    }
+    // --- END GATEKEEPER LOGIC ---
+
+    $result = $wpdb->insert(
+        $table_name,
+        array(
+            'zone_id' => $zone_id,
+            'user_email' => $current_user->user_email,
+            'status' => 'pending'
+        )
+    );
+
+    if ( $result ) {
+        wp_send_json_success( array( 'job_id' => $wpdb->insert_id ) );
+    } else {
+        wp_send_json_error( 'Database error.' );
+    }
+}
+
+add_action( 'wp_ajax_fsbhoa_request_lights', 'fsbhoa_handle_light_request' );
+
+/**
+ * 4. Status Check (Same as before)
+ */
+function fsbhoa_check_job_status() {
+    $job_id = isset($_POST['job_id']) ? intval($_POST['job_id']) : 0;
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'lighting_queue';
+    
+    $status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM $table_name WHERE id = %d", $job_id ) );
+
+    if ( $status ) {
+        wp_send_json_success( array( 'status' => $status ) );
+    } else {
+        wp_send_json_error( 'Job not found' );
+    }
+}
+add_action( 'wp_ajax_fsbhoa_check_status', 'fsbhoa_check_job_status' );
+
+
+
+

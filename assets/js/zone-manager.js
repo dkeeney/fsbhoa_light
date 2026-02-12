@@ -82,7 +82,13 @@ const loadAllConfigData = async () => {
         const liveStatus = statusRes.ok ? await statusRes.json() : {};
 
         // 3. Render
-        if (zoneApp) renderZonesTable(zoneApp.querySelector('#zones-list-container'), zoneApp.querySelector('#save-zone-assignments-btn'), allZones, allSchedules);
+        if (zoneApp) renderZonesTable(
+            zoneApp.querySelector('#zones-list-container'), 
+            zoneApp.querySelector('#save-zone-assignments-btn'), 
+            allZones, 
+            allSchedules,
+            liveStatus
+        );
         if (scheduleApp) renderSchedulesTable(scheduleApp.querySelector('#schedules-list-container'), allSchedules);
         
         // FIX: Pass allZones and liveStatus to the mapping renderer
@@ -107,49 +113,29 @@ const updateBulbsOnly = async () => {
         const liveStatus = await res.json();
 
         allMappings.forEach(map => {
-            // Find the bulb icon in the Relay Mapping table row
             const btn = document.querySelector(`.micro-btn[data-id="${map.id}"]`);
             if (!btn) return;
 
             const row = btn.closest('tr');
+
+            // 1. Get the unified status from the helper
+            const status = calculateBulbStatus(map, allZones, liveStatus);
+
+            // 2. Update the Bulb
             const bulb = row.querySelector('.monitor-bulb');
-            if (!bulb) return;
-
-            // Determine if the schedule for this mapping's zone is active
-            let isSchedActive = false;
-            if (map.linked_zone_ids && map.linked_zone_ids.length > 0) {
-                const zoneId = map.linked_zone_ids[0];
-                const zone = allZones.find(z => z.id == zoneId);
-                if (zone && liveStatus[`Sched${zone.schedule_id}`] === true) {
-                    isSchedActive = true;
-                }
+            if (bulb) {
+                // Remove any old status classes
+                bulb.classList.remove('status-auto-on', 'status-manual-on', 'status-manual-off', 'status-auto-off');
+                // Add the new one from the helper
+                bulb.classList.add(status.class);
+                bulb.title = status.tooltip;
             }
 
-            // Check if physical outputs are ON
-            let monitoredOn = 0;
-            if (Array.isArray(map.plc_outputs)) {
-                map.plc_outputs.forEach(out => {
-                    const key = `PLC${map.plc_id}-${out}`;
-                    if (liveStatus[key] === true) monitoredOn++;
-                });
+            // 3. Update the Badges
+            const badgeContainer = row.querySelector('.badge-container');
+            if (badgeContainer) {
+                badgeContainer.innerHTML = status.badges;
             }
-
-            // Update classes for color logic
-            bulb.classList.remove('status-auto-on', 'status-manual-on', 'status-manual-off', 'status-auto-off');
-            
-            let newClass = '';
-            let newTooltip = '';
-
-            if (monitoredOn > 0) {
-                newClass = isSchedActive ? 'status-auto-on' : 'status-manual-on';
-                newTooltip = 'ON';
-            } else {
-                newClass = isSchedActive ? 'status-manual-off' : 'status-auto-off';
-                newTooltip = 'OFF';
-            }
-
-            bulb.classList.add(newClass);
-            bulb.title = newTooltip;
         });
 
     } catch (e) {
@@ -242,8 +228,9 @@ document.addEventListener('DOMContentLoaded', function () {
             else if (qrBtn) {
                 const zoneId = qrBtn.dataset.zoneId;
                 const zone = allZones.find(z => z.id == zoneId);
-                const triggerUrl = `https://fsbhoa.com/lights/?court=${encodeURIComponent(zone.zone_name)}`;
+                const triggerUrl = `${fsbhoa_lighting_data.bluehost_qr_url}?zone_id=${zone.id}`;    // base: `https://fsbhoa.com/lights`
                 const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(triggerUrl)}`;
+                const qr_duration = fsbhoa_lighting_data.qr_duration || 90;
 
                 const printWin = window.open('', '_blank');
                 printWin.document.write(`
@@ -252,7 +239,10 @@ document.addEventListener('DOMContentLoaded', function () {
                         <div id="loading">Generating QR Code...</div>
                         <h1>${escapeHTML(zone.zone_name)}</h1>
                         <img id="qr-code-img" src="${qrImageUrl}" style="width:300px; height:300px; margin:20px 0; display:none;" />
-                        <p style="font-size:18px;">Scan to activate lights for 90 minutes.</p>
+                        <p style="font-size:18px;">Scan to activate lights for ${qr_duration} minutes.</p>
+                        <div style="font-family:monospace; font-size:10px; color:#999; margin-top:30px; border-top:1px solid #eee; padding-top:10px;">
+                            Target URL: ${escapeHTML(triggerUrl)}
+                        </div>
                         <script>
                             const img = document.getElementById('qr-code-img');
                             img.onload = function() {
@@ -328,6 +318,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
                     // Success: flash green
                     select.style.outline = '2px solid green';
+
+                    // Trigger reload to update QR icon visibility
+                    setTimeout(loadAllConfigData, 500);
                 } catch (error) {
                     // Failure: flash red
                     console.error('Error saving assignment:', error);
@@ -357,16 +350,49 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         scheduleApp.addEventListener('change', e => {
-            if (e.target.matches('select[name="on_trigger"], select[name="off_trigger"]')) {
-                e.target.nextElementSibling.style.display = e.target.value === 'TIME' ? 'inline-block' : 'none';
+            if (e.target.matches('select[name="on_trigger"]')) {
+                const val = e.target.value;
+                // Show time input for Fixed Time or QR & Time
+                e.target.nextElementSibling.style.display = (val === 'TIME' || val === 'QR_TIME') ? 'inline-block' : 'none';
+            }
+            if (e.target.matches('select[name="off_trigger"]')) {
+                const val = e.target.value;
+                e.target.nextElementSibling.style.display = (val === 'TIME') ? 'inline-block' : 'none';
             }
         });
 
         scheduleApp.addEventListener('click', async e => {
             const isSchedEdit = e.target.matches('.edit-schedule-link');
             const isSchedDelete = e.target.matches('.delete-schedule-link');
+            const isSchedClone = e.target.matches('.clone-schedule-link') || e.target.closest('.clone-schedule-link');
 
             if (isSchedEdit || isSchedDelete || e.target.matches('.remove-span-btn, #add-span-btn, #cancel-btn')) e.preventDefault();
+
+            if (e.target.matches('#add-span-btn')) {
+                e.preventDefault();
+                const spansContainer = document.getElementById('schedule-spans-container');
+                if (spansContainer) {
+                    // Create a temporary div to turn the string into a DOM element
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = renderSpanRow(); // Calls helper from zone-manager-ui.js
+                    
+                    // Append the actual child node
+                    spansContainer.appendChild(tempDiv.firstElementChild);
+                }
+            }
+
+            if (e.target.matches('.remove-span-btn')) {
+                e.preventDefault();
+                const row = e.target.closest('.schedule-span-row');
+                const container = document.getElementById('schedule-spans-container');
+                
+                // Only remove if there's more than one row left
+                if (container.querySelectorAll('.schedule-span-row').length > 1) {
+                    row.remove();
+                } else {
+                    alert('Schedules must have at least one time span.');
+                }
+            }
 
             if (e.target.matches('#cancel-btn')) {
                 scheduleFormContainer.style.display = 'none'; scheduleListContainer.style.display = 'block'; addScheduleBtn.style.display = 'inline-block';
@@ -377,6 +403,29 @@ document.addEventListener('DOMContentLoaded', function () {
             } else if (isSchedDelete) {
                 const id = e.target.dataset.scheduleId;
                 if (confirm('Are you sure?')) { await scheduleApi.delete(id); loadAllConfigData(); }
+            }
+
+            if (isSchedClone) {
+                e.preventDefault();
+                const btn = e.target.closest('.clone-schedule-link');
+                const id = btn.dataset.scheduleId;
+                
+                // Find original, create a deep copy (clone)
+                const original = allSchedules.find(s => s.id == id);
+                if (original) {
+                    const cloned = JSON.parse(JSON.stringify(original));
+                    
+                    // Reset ID and modify name
+                    cloned.id = 0; 
+                    cloned.schedule_name = cloned.schedule_name + " (Copy)";
+                    
+                    // Open the form with the cloned data
+                    const scheduleListContainer = scheduleApp.querySelector('#schedules-list-container');
+                    const scheduleFormContainer = scheduleApp.querySelector('#schedule-form-container');
+                    const addScheduleBtn = scheduleApp.querySelector('#add-new-schedule-btn');
+                    
+                    renderScheduleForm(scheduleFormContainer, scheduleListContainer, addScheduleBtn, cloned);
+                }
             }
         });
 
@@ -390,9 +439,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 };
                 let validationError = null;
 
-        	document.querySelectorAll('.schedule-span-row').forEach(row => {
-                    if (validationError) return; // Stop processing if we found an error
+                const spanRows = e.target.querySelectorAll('.schedule-span-row');
 
+                for (const row of spanRows) {
                     const daysOfWeek = Array.from(row.querySelectorAll('input[name="days_of_week"]:checked')).map(cb => cb.value);
             
                     const onTrigger = row.querySelector('[name="on_trigger"]').value;
@@ -409,20 +458,20 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
 
                     // 2. Validation Rules
-                    if (onTrigger === 'TIME' && offTrigger === 'TIME') {
+                    if ((onTrigger === 'TIME' || onTrigger === 'QR_TIME') && offTrigger === 'TIME') {
                         // Rule: Start must be before End
                         if (onTimeInput >= offTimeInput) {
                             validationError = `Invalid Time: ${formatTime(onTimeInput)} to ${formatTime(offTimeInput)}.\n\nSchedules cannot cross midnight. Please split this into two spans (e.g., Evening to 23:59, then 00:00 to Morning).`;
-                            return;
+                            break;
                         }
                     } 
-                    else if (onTrigger === 'SUNDOWN' && offTrigger === 'TIME') {
+                    else if ((onTrigger === 'SUNDOWN' || onTrigger === 'QR_SUNDOWN') && offTrigger === 'TIME') {
                         // Rule: If starting at Sundown, End Time must be PM (or 23:59)
                         // If they pick an AM time (e.g. 02:00), the light won't turn on until midnight.
                         // We use '12:00' as a safe heuristic for "Noon".
                         if (offTimeInput < '12:00' && offTimeInput !== '23:59') {
                              validationError = `Invalid Logic: "Sundown to ${formatTime(offTimeInput)}".\n\nBecause ${formatTime(offTimeInput)} is the next morning, this schedule crosses midnight.\n\nPlease split this into two spans:\n1. Sundown to 23:59\n2. 00:00 to ${formatTime(offTimeInput)}`;
-                             return;
+                             break;
                         }
                     }
                     else if (onTrigger === 'TIME' && offTrigger === 'SUNRISE') {
@@ -430,7 +479,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         // If they pick a PM time (e.g. 22:00), it crosses midnight.
                         if (onTimeInput > '12:00') {
                              validationError = `Invalid Logic: "${formatTime(onTimeInput)} to Sunrise".\n\nBecause ${formatTime(onTimeInput)} is the previous night, this schedule crosses midnight.\n\nPlease split this into two spans:\n1. ${formatTime(onTimeInput)} to 23:59\n2. 00:00 to Sunrise`;
-                             return;
+                             break;
                         }
                     }
 
@@ -441,7 +490,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         off_trigger: offTrigger,
                         off_time: offTimeInput, // Send the potentially corrected '23:59'
                     });
-                });
+                }
 
                 if (validationError) {
                     alert(validationError);
