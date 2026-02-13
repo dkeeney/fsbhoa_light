@@ -50,6 +50,7 @@ func (app *App) handleSyncTrigger(w http.ResponseWriter, r *http.Request, _ http
 		http.Error(w, "Failed to fetch config from WordPress", http.StatusInternalServerError)
 		return
 	}
+        log.Printf("DEBUG DATA FROM UI: %+v", configData)
 
         // 2. Update the shared state!
         app.PLCConfig = configData 

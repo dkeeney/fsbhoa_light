@@ -5,6 +5,7 @@
   "ladder_file": "../LadderLogicForAI.txt",
   "scan_rate_ms": 50,
   "slow_mo_sec": 1.0,
+  "startup_running": true,
   "initial_state": {
     "X001": false,
     "C153": true,

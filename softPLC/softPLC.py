@@ -51,6 +51,15 @@ class MemoryManager:
             self._build_sticky_map(config)
             self.clear_volatile_memory(config)
 
+            # Look for 'startup_running' in config. Default to False (Step Mode) if not found.
+            val = config.get('startup_running', False)
+            if str(val).lower() == 'true':
+                self.step_mode = False
+                logger.info("MEM: Config set to STARTUP_RUNNING. Initializing in Free-Run.")
+            else:
+                self.step_mode = True
+                logger.info("MEM: Initializing in STEP_MODE (Paused).")
+
     def _build_sticky_map(self, config):
         """Processes config once to create a high-speed lookup for retentive ranges."""
         ranges = config.get('retentive_ranges', [])

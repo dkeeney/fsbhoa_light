@@ -59,13 +59,12 @@ function fsbhoa_lighting_create_or_update_zone( WP_REST_Request $request ) {
     $params = $request->get_json_params();
     $zone_id = isset( $params['zone_id'] ) ? intval( $params['zone_id'] ) : 0;
     $zone_name = sanitize_text_field( $params['zone_name'] );
-    $is_timed = isset( $params['is_timed'] ) ? intval( $params['is_timed'] ) : 0;
     $description = isset($params['description']) ? sanitize_textarea_field( $params['description'] ) : '';
     $mapping_ids = isset( $params['mapping_ids'] ) ? array_map( 'intval', $params['mapping_ids'] ) : [];
 
     if ( empty( $zone_name ) ) { return new WP_REST_Response( [ 'message' => 'Zone name is required.' ], 400 ); }
 
-    $data = ['zone_name' => $zone_name, 'description' => $description, 'is_timed' => $is_timed];
+    $data = ['zone_name' => $zone_name, 'description' => $description];
     
     $wpdb->query('START TRANSACTION');
     try {
@@ -321,7 +320,7 @@ function fsbhoa_lighting_get_full_config() {
     $zones_table = $wpdb->prefix . 'fsbhoa_lighting_zones';
     $schedule_map_table = $wpdb->prefix . 'fsbhoa_lighting_zone_schedule_map';
     $zones_raw = $wpdb->get_results( "
-        SELECT z.id, z.zone_name, z.is_timed, COALESCE(sm.schedule_id, 0) as schedule_id
+        SELECT z.id, z.zone_name, COALESCE(sm.schedule_id, 0) as schedule_id
         FROM $zones_table z
         LEFT JOIN $schedule_map_table sm ON z.id = sm.zone_id
         ORDER BY z.zone_name ASC

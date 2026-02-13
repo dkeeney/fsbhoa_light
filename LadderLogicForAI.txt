@@ -9,7 +9,7 @@
 //   Rungs with Loops cannot have contacts.
 //   Dereferencing, for example, C[DS30], can only be done in the COPY instruction
 //
-//  The IPAddress for the master is hard coded as 192.168.42.60.  So during installation
+//  The IPAddress for the master is hard coded as 192.168.42.61.  So during installation
 //  be sure to configure the master's IP Address as static so the slave can find it.
 //
 //
@@ -35,7 +35,6 @@ Rung 2: [Always] -> (RST C1020) // Always_OFF bit
 // Note that the RECV instruction calls this the "Server (Slave)"
 // but it is the IP address of the side that has the photo cell which
 // is down at the Cabana.
-// (SC4 is a 0.2s clock, so we poll 5x per second)
 //
 // When copying this Logic from Lodge to Cabana, change this Rung.
 // If Cabana (Master) set C153
@@ -43,10 +42,10 @@ Rung 2: [Always] -> (RST C1020) // Always_OFF bit
 
 Rung 3: [SC2] -> (Set C153)
 
-Rung 4: [C153] [NOT X001] -> (RST C154)
-        (parallel) [X001] -> (OUT C154)
+Rung 4: [C153] [X001] -> (OUT C154)
 
-Rung 5: [NOT C153] [SC4] -> (RECV Via WLAN IP: 192.168.42.61
+// Slave will poll for photocell state every 1 second (SC7).
+Rung 5: [NOT C153] [SC7] -> (RECV Via WLAN IP: 192.168.42.61
                              ServerPortNo: 502, Slave ID 1
                              Modbus Function code: 01
                              Slave Addr: C154, 1 bit.
@@ -87,7 +86,6 @@ Rung 7: [NOT C1005] [NOT T2] -> (MATH DS3 = DS3 + 1) // Increment Sequencer
 Rung 8: [CMP DS3 > 24] -> (COPY 1 -> DS3)   // Wrap Sequencer to 1
         (parallel) -> (CALL SCHED_ENGINE)   // Process schedules
         (parallel) -> (CALL ACTION_ENGINE)  // Requests ON or OFF
-        (parallel) -> (RST C151)
 
 // ---------------------------------
 // Compute and dereference ptrs (for the *current* DS3 light)
@@ -162,7 +160,7 @@ Rung 28: [Always] -> (END)
 ## Subroutine: SCHED_ENGINE
 
 // ---------------------------------
-// 2. Schedule Engine  Subroutine
+// Schedule Engine  Subroutine
 // ---------------------------------
 // Iterate through all of the schedules and determine if any are active.
 // It is active if at least one span within the schedule is active.
@@ -175,24 +173,33 @@ Rung 28: [Always] -> (END)
 // DS2 - the Span index 1 - 14
 // DS4 - the Schedule index 1 - 12
 
+// Sync Handshake
+// If there was as schedule sync request set by the GO service, 
+// make the sync active at the top of the cycle.  This will force 
+// all relays to be in sync with the schedule.  Use this when 
+// schedules are modified or remapped. This will cancel all manual 
+// overrides. It also is used for the first pass after power startup.
+Rung 1:  [C151]   -> (SET C152)
+       (parallel) -> (RST C151)
+
 // ---------------------------------
-// Start 12 Schedule Loop
+// Start  Schedule Loop
 //
 // Process all of the Schedules and the schedule segments in them.
 // There is a max of 12 schedules with up to 14 spans per schedule.
 // Start the single, flattened loop (12 * 14 = 168)
 // Iterate through the schedule segments.
 //  (This FOR loop uses DS1 as its counter, 1-168)
-Rung 1: [Always] -> (COPY 1 -> DS1)
-Rung 2: [Always] -> (FOR 168)
+Rung 2: [Always] -> (COPY 1 -> DS1)
+Rung 3: [Always] -> (FOR 168)
 
 //  Calculate Schedule Index (1-12) and Span Index (0-13)
-Rung 3:  [Always] -> (MATH DS4 = (DS1 - 1) / 14 + 1)  // Calc Sched_Index
-Rung 4: [Always] -> (MATH DS2 = (DS1 - 1) MOD 14)    // Calc Span_Index
+Rung 4:  [Always] -> (MATH DS4 = (DS1 - 1) / 14 + 1)  // Calc Sched_Index
+Rung 5: [Always] -> (MATH DS2 = (DS1 - 1) MOD 14)    // Calc Span_Index
 
 //  Reset Temp bits on the *first span* of a schedule
 //  Also, save the previous Schedule state and clear the current state.
-Rung 5: [CMP DS2 == 0] -> (RST C1001)    // clear Temp_Span_Active
+Rung 6: [CMP DS2 == 0] -> (RST C1001)    // clear Temp_Span_Active
           (parallel) -> (MATH DS10 = DS4 + 1050)  // ptr Curr Sched state
           (parallel) -> (MATH DS11 = DS4 + 1100)  // ptr Prev Sched state
           (parallel) -> (COPY DS[DS10] -> DS[DS11]) // Save previous sched state
@@ -200,69 +207,69 @@ Rung 5: [CMP DS2 == 0] -> (RST C1001)    // clear Temp_Span_Active
 
 
 //  Calculate Span Table Pointer
-Rung 6: [Always] -> (MATH DS21 = (DS4-1)*70 + DS2*5 + 100)  // Ptr Span Base
-Rung 7: [Always] -> (COPY DS[DS21] -> DH49)
-Rung 8: [CMP DH49 == 0] -> (MATH DS1 = DS1 + 1)
+Rung 7: [Always] -> (MATH DS21 = (DS4-1)*70 + DS2*5 + 100)  // Ptr Span Base
+Rung 8: [Always] -> (COPY DS[DS21] -> DH49)
+Rung 9: [CMP DH49 == 0] -> (MATH DS1 = DS1 + 1)
               (parallel) -> (NEXT)                // Span not used
 
-Rung 9: [Always] -> (RST C1011 to C1013) // Clear Temp_Span_Start_OK
+Rung 10: [Always] -> (RST C1011 to C1013) // Clear Temp_Span_Start_OK
                                           // Clear Temp_Span_End_OK
                                           // Clear Temp_Span_QR_OK
 // == Day of Week Check  ==
-Rung 10: [Always] -> (MATH DS42 = SD23 - 1)    // current day
-Rung 11: [Always] -> (COPY 0h -> DH41)
+Rung 11: [Always] -> (MATH DS42 = SD23 - 1)    // current day
+Rung 12: [Always] -> (COPY 0h -> DH41)
 // Check for Sunday (Day 0) & bit 0
-Rung 12: [CMP DS42 == 0] -> (MATH DH41 = DH49 & 1h)
+Rung 13: [CMP DS42 == 0] -> (MATH DH41 = DH49 & 1h)
 // Check for Monday (Day 1) & bit 1
-Rung 13: [CMP DS42 == 1] -> (MATH DH41 = DH49 & 2h)
+Rung 14: [CMP DS42 == 1] -> (MATH DH41 = DH49 & 2h)
 // Check for Tuesday (Day 2) & bit 2
-Rung 14: [CMP DS42 == 2] -> (MATH DH41 = DH49 & 4h)
+Rung 15: [CMP DS42 == 2] -> (MATH DH41 = DH49 & 4h)
 // Check for Wednesday (Day 3) & bit 3
-Rung 15: [CMP DS42 == 3] -> (MATH DH41 = DH49 & 8h)
+Rung 16: [CMP DS42 == 3] -> (MATH DH41 = DH49 & 8h)
 // Check for Thursday (Day 4) & bit 4
-Rung 16: [CMP DS42 == 4] -> (MATH DH41 = DH49 & 10h)
+Rung 17: [CMP DS42 == 4] -> (MATH DH41 = DH49 & 10h)
 // Check for Friday (Day 5) & bit 5
-Rung 17: [CMP DS42 == 5] -> (MATH DH41 = DH49 & 20h)
+Rung 18: [CMP DS42 == 5] -> (MATH DH41 = DH49 & 20h)
 // Check for Saturday (Day 6) & bit 6
-Rung 18: [CMP DS42 == 6] -> (MATH DH41 = DH49 & 40h)
+Rung 19: [CMP DS42 == 6] -> (MATH DH41 = DH49 & 40h)
 // Set/Reset the Temp_Day_OK bit (C1000)
-Rung 19: [CMP DH41 > 0] -> (OUT C1000) // Temp_Day_OK
+Rung 20: [CMP DH41 > 0] -> (OUT C1000) // Temp_Day_OK
 
 // == Time/Trigger Check (Rungs 16-24) ==
-Rung 20: [Always] -> (MATH DS47 = DS21 + 1)       // Ptr to OnTrig
-Rung 21: [Always] -> (COPY DS[DS47] -> DS43)      // OnTrig value
+Rung 21: [Always] -> (MATH DS47 = DS21 + 1)       // Ptr to OnTrig
+Rung 22: [Always] -> (COPY DS[DS47] -> DS43)      // OnTrig value
 // Note, OnTrig (DS43) is  0= time start, 1 = Photocell start, 2= QR start
 // Get OnTime, Note: Time is HHMM 24hr
-Rung 22: [Always] -> (MATH DS47 = DS21 + 2)
-Rung 23: [Always] -> (COPY DS[DS47] -> DS45)      // OnTime value
+Rung 23: [Always] -> (MATH DS47 = DS21 + 2)
+Rung 24: [Always] -> (COPY DS[DS47] -> DS45)      // OnTime value
 // Note, OffTrig (DS44) is  0= time end, 1 = Photocell end, 2= QR start (end with either)
-Rung 24: [Always] -> (MATH DS48 = DS21 + 3)
-Rung 25: [Always] -> (COPY DS[DS48] -> DS44)      // OffTrig value
+Rung 25: [Always] -> (MATH DS48 = DS21 + 3)
+Rung 26: [Always] -> (COPY DS[DS48] -> DS44)      // OffTrig value
 // Get OffTime, Note: Time is HHMM 24hr
-Rung 26: [Always] -> (MATH DS48 = DS21 + 4)
-Rung 27: [Always] -> (COPY DS[DS48] -> DS46)      // OffTime value
+Rung 27: [Always] -> (MATH DS48 = DS21 + 4)
+Rung 28: [Always] -> (COPY DS[DS48] -> DS46)      // OffTime value
 // Determine if start is ok (beyond start time or photocell on)
-Rung 28: [C1000] [CMP DS43 == 0] [CMP DS30 >= DS45] -> (SET C1011)
-Rung 29: [C1000] [CMP DS43 == 1] [C154] -> (SET C1011)
-Rung 30: [C1000] [CMP DS43 == 2] [CMP DS30 >= DS45] -> (SET C1013)
-Rung 31: [C1000] [CMP DS43 == 3] [C154] -> (SET C1013)
+Rung 29: [C1000] [CMP DS43 == 0] [CMP DS30 >= DS45] -> (SET C1011)
+Rung 30: [C1000] [CMP DS43 == 1] [C154] -> (SET C1011)
+Rung 31: [C1000] [CMP DS43 == 2] [CMP DS30 >= DS45] -> (SET C1013)
+Rung 32: [C1000] [CMP DS43 == 3] [C154] -> (SET C1013)
 // Determine if end time is ok (end time not reached or photocell still on)
-Rung 32: [C1000] [CMP DS44 == 0] [CMP DS30 <= DS46] -> (SET C1012)
-Rung 33: [C1000] [CMP DS44 == 1] [C154] -> (SET C1012)
+Rung 33: [C1000] [CMP DS44 == 0] [CMP DS30 <= DS46] -> (SET C1012)
+Rung 34: [C1000] [CMP DS44 == 1] [C154] -> (SET C1012)
 
 // If day ok, start ok, end ok, we are inside a span. Span is active, so schedule is active.
-Rung 34: [C1011] [C1012] -> (COPY 1 -> DS[DS10])   // Set schedule active ON.
-Rung 35: [C1013] [C1012] -> (COPY DS[DS10] -> DS56)     // Fetch current status for guard
-Rung 36: [C1013] [C1012] [CMP DS56 != 1] -> (COPY 2 -> DS[DS10])   // Set schedule QR enabled
+Rung 35: [C1011] [C1012] -> (COPY 1 -> DS[DS10])   // Set schedule active ON.
+Rung 36: [C1013] [C1012] -> (COPY DS[DS10] -> DS56)     // Fetch current status for guard
+Rung 37: [C1013] [C1012] [CMP DS56 != 1] -> (COPY 2 -> DS[DS10])   // Set schedule QR enabled
 
 
 //  Next (ends the 1-168 loop)
-Rung 37: [Always] -> (MATH DS1 = DS1 + 1)
-Rung 38: [Always] -> (NEXT)  // Next time segment
+Rung 38: [Always] -> (MATH DS1 = DS1 + 1)
+Rung 39: [Always] -> (NEXT)  // Next time segment
 
 
 // Return from Subroutine
-Rung 39: [Always] -> (RET)
+Rung 40: [Always] -> (RET)
 
 
 //=================================================================================
@@ -272,36 +279,39 @@ Rung 39: [Always] -> (RET)
 // Each Light (actually the H-Bridge that drives a set of relays)
 // All lights must have a reference to a schedule if active.
 
+// latch the sync flag so it cannot change while processing the actions
+Rung 1: [C151]   -> (SET C152)
+      (parallel) -> (RST C151)
+
 // Loop through the lights and determine which ones need to be turned on.
-Rung 1: [Always] -> (COPY 1 -> DS5)
-Rung 2: [Always] -> (FOR 24)
+Rung 2: [Always] -> (COPY 1 -> DS5)
+Rung 3: [Always] -> (FOR 24)
 
 // Setup the pointers for this light
-Rung 3:  [Always] -> (MATH DS20 = DS5 + 999)   // pointer to mapping of schedule to use for this light
-Rung 4:  [Always] -> (COPY DS[DS20] -> DS50)   // index of  schedule for this light (0-12)
-Rung 5:  [CMP DS50 == 0] -> (MATH DS5 = DS5 + 1)
+Rung 4:  [Always] -> (MATH DS20 = DS5 + 999)   // pointer to mapping of schedule to use for this light
+Rung 5:  [Always] -> (COPY DS[DS20] -> DS50)   // index of  schedule for this light (0-12)
+Rung 6:  [CMP DS50 == 0] -> (MATH DS5 = DS5 + 1)
            (parallel) -> (NEXT)             // No schedule, unused light
 
-Rung 6:  [Always] -> (MATH DS51 = (DS50 - 1)*70 + 101)  // Ptr to OnTrig on Schedule's first Span
-Rung 7:  [Always] -> (MATH DS10 = DS50 + 1050)  // pointer to curr state of schedule for this light
-Rung 8:  [Always] -> (MATH DS11 = DS50 + 1100)  // pointer to prev state of schedule for this light
-Rung 9:  [Always] -> (MATH DS16 = DS5 + 200)   // pointer to RequestON bit for this light
-Rung 10: [Always] -> (MATH DS17 = DS5 + 250)   // pointer to RequestOFF bit for this light
-Rung 11: [Always] -> (MATH DS18 = DS5 + 940)   // Ptr to curr QREnd (DS941+)
-Rung 12: [Always] -> (MATH DS22 = DS5 + 970)   // Ptr to prev QREnd (DS971+)
-Rung 13: [Always] -> (COPY DS[DS10] -> DS56)   // value of curr state of schedule (DS1050-DS1061)
-Rung 14: [Always] -> (COPY DS[DS11] -> DS57)   // value of prev state of schedule (DS1100-DS1111)
-Rung 15: [Always] -> (COPY DS[DS18] -> DS19)   // value of curr QREnd (HHMM) (from DS941-DS964)
-Rung 16: [Always] -> (COPY DS[DS22] -> DS23)   // value of prev QREnd (HHMM) (from DS971-DS094)
-Rung 17: [Always] -> (COPY DS[DS51] -> DS52)   // value of ONTrig for this schedulule
+Rung 7:  [Always] -> (MATH DS51 = (DS50 - 1)*70 + 101)  // Ptr to OnTrig on Schedule's first Span
+Rung 8:  [Always] -> (MATH DS10 = DS50 + 1050)  // pointer to curr state of schedule for this light
+Rung 9:  [Always] -> (MATH DS11 = DS50 + 1100)  // pointer to prev state of schedule for this light
+Rung 10:  [Always] -> (MATH DS16 = DS5 + 200)   // pointer to RequestON bit for this light
+Rung 11: [Always] -> (MATH DS17 = DS5 + 250)   // pointer to RequestOFF bit for this light
+Rung 12: [Always] -> (MATH DS18 = DS5 + 940)   // Ptr to curr QREnd (DS941+)
+Rung 13: [Always] -> (MATH DS22 = DS5 + 970)   // Ptr to prev QREnd (DS971+)
+Rung 14: [Always] -> (COPY DS[DS10] -> DS56)   // value of curr state of schedule (DS1050-DS1061)
+Rung 15: [Always] -> (COPY DS[DS11] -> DS57)   // value of prev state of schedule (DS1100-DS1111)
+Rung 16: [Always] -> (COPY DS[DS18] -> DS19)   // value of curr QREnd (HHMM) (from DS941-DS964)
+Rung 17: [Always] -> (COPY DS[DS22] -> DS23)   // value of prev QREnd (HHMM) (from DS971-DS094)
 
 // == Schedule Transition Check ==
 //   CASE 1, transition to scheduleON   -> RequestON  and kill QREnd
-Rung 18: [OR [C151] [CMP DS56 != DS57]] [CMP DS56 == 1] -> (COPY SC1 -> C[DS16])   // ReqON
+Rung 18: [OR [C152] [CMP DS56 != DS57]] [CMP DS56 == 1] -> (COPY SC1 -> C[DS16])   // ReqON
                              (parallel) -> (COPY 0 -> DS[DS18])    // clear QREnd
 
 //   CASE 2, Transition to scheduleOFF  -> RequestOFF and kill QREnd
-Rung 19: [OR [C151] [CMP DS56 != DS57]] [CMP DS56 == 0] -> (COPY SC1 -> C[DS17])   // ReqOFF
+Rung 19: [OR [C152] [CMP DS56 != DS57]] [CMP DS56 == 0] -> (COPY SC1 -> C[DS17])   // ReqOFF
                              (parallel) --> (COPY 0 -> DS[DS18])
 
 //   CASE 3, in scheduleQR and QREnd expires -> RequestOFF
@@ -311,13 +321,13 @@ Rung 20:[DS56 == 2] [CMP DS19 > 0] [CMP DS19 < DS30] -> (COPY SC1 -> C[DS17])   
 Rung 21: [CMP DS19 > 0] [CMP DS19 < DS30]  -> (COPY 0 -> DS[DS18])    // clear QREnd
 
 //   CASE 5, Transition to scheduleQR and QREnd exists -> RequestON
-Rung 22: [CMP DS56 == 2] [OR [C151] [CMP DS56 != DS57]] [CMP DS19 != 0] [CMP DS19 > DS30]  -> (COPY SC1 -> C[DS16])   // ReqON
+Rung 22: [CMP DS56 == 2] [OR [C152] [CMP DS56 != DS57]] [CMP DS19 != 0] [CMP DS19 > DS30]  -> (COPY SC1 -> C[DS16])   // ReqON
 
 //   CASE 6, in scheduleQR and new QREnd -> RequestON
 Rung 23: [CMP DS56 == 2] [CMP DS19 != 0] [CMP DS19 != DS23] [CMP DS19 > DS30]  -> (COPY SC1 -> C[DS16])   // ReqON
 
 //   CASE 7, in scheduleQR, no QREnd, and sync.
-Rung 24: [CMP DS56 == 2] [C151] [CMP DS19 == 0] ->  (COPY SC1 -> C[DS17])      // ReqOff
+Rung 24: [CMP DS56 == 2] [C152] [CMP DS19 == 0] ->  (COPY SC1 -> C[DS17])      // ReqOff
 
 //   CASE 8, Manual-override-ON -> ReqtON      (Set by lighting-service - must also clear QREnd)
 //   CASE 9, Manual-override-OFF -> ReqOFF     (Set by lighting-service - must also clear QREnd)
@@ -327,7 +337,8 @@ Rung 24: [CMP DS56 == 2] [C151] [CMP DS19 == 0] ->  (COPY SC1 -> C[DS17])      /
 Rung 25: [Always] -> (COPY DS[DS18] -> DS[DS22]) // Save the current QREnd to previous QREnd.
 Rung 26: [Always] -> (MATH DS5 = DS5 + 1)
 Rung 27: [Always] -> (NEXT) // Next Light
-Rung 28: [Always] -> (RET)    // return from ACTION_ENGINE
+Rung 28: [Always] -> (RST C152)
+Rung 29: [Always] -> (RET)    // return from ACTION_ENGINE
 
 
 
@@ -337,6 +348,7 @@ Rung 28: [Always] -> (RET)    // return from ACTION_ENGINE
 X001   - photocell input
 C101 to C124 - Current State of a light
 C151   - Request to sync all lights to schedule (clears overrides)
+C152   - temp latch of C151 (sync)
 C153   - isMasterPLC
 C154   - Photocell State
 C201 to C224 - RequestON for a light
@@ -348,7 +360,7 @@ C1003 - temp Previous Sched State for current output
 C1004
 C1005 - Busy with a pulse for current output
 C1006
-C1007 - temp value of current state of light
+C1007
 C1008 - Busy with deadtime for a pulse
 C1009 - temp RequestON for current output
 C1010 - temp RequestOFF for current output
@@ -373,7 +385,7 @@ DS16  - Ptr to RequstON for an output (light)
 DS17  - Ptr to RequstOFF for an output (light)
 DS18  - Ptr to QREnd time
 DS19  - temp value of current QREnd time for schedule
-DS20  - Ptr to Schedule Ptr for an output (light).  Which schedule to use for a light.
+DS20  - Ptr to Schedule index for an output (light).  Which schedule to use for a light.
 DS21  - Ptr to Specific Schedule Span Base
 DS22  - Ptr to prev QREnd time for schedule
 DS23  - temp value of prev QREnd time for schedule
