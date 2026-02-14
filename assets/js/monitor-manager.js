@@ -77,11 +77,14 @@ document.addEventListener('DOMContentLoaded', function () {
             const schedStatus = status[`Sched${zone.schedule_id}`] || 0;
             const qroffValue = status[`qroff_zone_${zone.id}`] || 0;
 
-            // hasTimedCapability means the Go Service 
-            // is currently processing a QR-based span for this zone.
+            // hasTimedCapability means that this schedule has a span
+            // that has QR_TIME or QR_SUNSET for the start trigger.
             // SchedStatus 2 = QR span is active but light is physically off.
             // SchedStatus 1 with qroffValue > 0 = QR span is active and light is on.
-            const hasTimedCapability = (schedStatus === 2) || (schedStatus === 1 && qroffValue > 0);
+            const assignedSchedule = allSchedules.find(s => s.id == zone.schedule_id);
+            const hasTimedCapability = assignedSchedule && assignedSchedule.spans.some(span => 
+    span.on_trigger.startsWith('QR_')
+);
 
             // 2. Identify Mappings (Physical Lights)
             const zoneMappings = mappingData.filter(m => 
@@ -176,8 +179,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // 5. Manual Control Links
             const currentLabel = isActuallyOn ? 'ON' : 'OFF';
+
+            // ON is disabled if the light is already ON
             const onLinkClasses = `override-link ${currentLabel === 'ON' ? 'is-disabled' : ''}`;
-            const offLinkClasses = `override-link ${currentLabel === 'OFF' ? 'is-disabled' : ''}`;
+
+            // OFF is disabled ONLY if (the light is already OFF AND the timer is 0)
+            // If the light is OFF but a timer is counting down, we want OFF to be enabled.
+            const isTimerRunning = qroffValue > 0;
+            const canStop = (currentLabel === 'ON') || isTimerRunning;
+            const offLinkClasses = `override-link ${!canStop ? 'is-disabled' : ''}`;
 
             const overrideLinks = `
                 <a href="#" class="${onLinkClasses}" data-zone-id="${zone.id}" data-state="on">ON</a>

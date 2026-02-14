@@ -57,7 +57,6 @@ function fsbhoa_lighting_activate() {
         id mediumint(9) NOT NULL AUTO_INCREMENT, 
         zone_name varchar(100) NOT NULL, 
         description text, 
-        is_timed tinyint(1) DEFAULT 0,
         PRIMARY KEY  (id) ) $charset_collate;";
     dbDelta( $sql_zones );
 

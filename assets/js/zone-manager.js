@@ -290,7 +290,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 e.preventDefault();
                 const formData = new FormData(e.target);
                 const data = Object.fromEntries(formData.entries());
-                data.is_timed = e.target.querySelector('#is_timed').checked ? 1 : 0;
                 data.mapping_ids = formData.getAll('mapping_ids[]');
                 await zoneApi.save(data);
                 formContainer.style.display = 'none'; listContainer.style.display = 'block'; addNewBtn.style.display = 'inline-block';
