@@ -110,6 +110,7 @@ func performLongPoll(client *http.Client, cfg Config) (*PollResponse, error) {
 	}
 
 	// AUTH & FORMAT HEADERS
+        req.Header.Set("User-Agent", "curl/7.81.0")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-Key", cfg.BluehostAPIKey)
 

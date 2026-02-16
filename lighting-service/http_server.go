@@ -28,6 +28,7 @@ func (app *App) RunServer() error {
 	router.GET("/status", app.handleStatus)
         router.POST("/test/mapping/:id/:state", app.handleTestMapping)
         router.POST("/trigger-timer/zone/:id", app.handleTriggerTimer)
+        router.GET("/debug/registers", app.handleDebugRegisters)
 
 	// Use ListenPort from config
 	return http.ListenAndServe(app.Config.ListenPort, router)

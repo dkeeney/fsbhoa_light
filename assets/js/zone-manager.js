@@ -350,9 +350,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         scheduleApp.addEventListener('change', e => {
             if (e.target.matches('select[name="on_trigger"]')) {
-                const val = e.target.value;
+                const val = e.target.value.toUpperCase();
                 // Show time input for Fixed Time or QR & Time
-                e.target.nextElementSibling.style.display = (val === 'TIME' || val === 'QR_TIME') ? 'inline-block' : 'none';
+                const needsTime = (val === 'TIME' || val.includes('TIME'));
+                e.target.nextElementSibling.style.display = needsTime ? 'inline-block' : 'none';
             }
             if (e.target.matches('select[name="off_trigger"]')) {
                 const val = e.target.value;

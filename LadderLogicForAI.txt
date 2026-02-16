@@ -418,7 +418,8 @@ DS100 to DS939     - Location of Schedule configuration
            +4  OffTime -- Time span ends (HHMM) 24hr inclusive
 DS941 to DS965    - curr QROff Time for timed lights (HHMM)  index is light index
 DS971 to DS995    - Prev QROff Time
-DS1000 to DS1023    Mapping of Schedule to use for each light.
+DS1000 to DS1023    Mapping of Schedule slot to use for each light.
+DS1031 to DS1042  - Mapping of Schedule ID for each schedule slot. (used by Go service)
 DS1051 to DS1062  - State of Schedule (0 = Off, 1 = ON, 2 = QR enabed.
 DS1101 to DS1112  - Previous state of Schedule.
 DH81  - temp HEX value 1

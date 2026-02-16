@@ -80,7 +80,7 @@ function fsbhoa_lighting_create_or_update_schedule(WP_REST_Request $request) {
                     'schedule_id'  => $schedule_id,
                     'days_of_week' => wp_json_encode($days),
                     'on_trigger'   => sanitize_text_field($span['on_trigger']),
-                    'on_time'      => ($span['on_trigger'] === 'TIME') ? sanitize_text_field($span['on_time']) : null,
+                    'on_time'      => (in_array($span['on_trigger'], ['TIME', 'QR_TIME'])) ? sanitize_text_field($span['on_time']) : null,
                     'off_trigger'  => sanitize_text_field($span['off_trigger']),
                     'off_time'     => $off_time,
                 ]);

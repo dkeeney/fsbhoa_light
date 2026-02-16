@@ -42,6 +42,17 @@ type FullConfigurationData struct {
 	Mappings  []FullConfigMapping  `json:"mappings"`
 	Schedules []FullConfigSchedule `json:"schedules"`
 }
+type PLCDebugData struct {
+	PLCID           int                 `json:"plc_id"`
+	Host            string              `json:"host"`
+	LightStatus     []bool              `json:"light_status_c101_c124"`
+	ScheduleSpans   map[int][]uint16    `json:"schedule_spans_ds100_ds939"` // Key is Slot 1-12
+	QRTimers        []uint16            `json:"qr_timers_ds941_ds965"`
+	LightMap        []uint16            `json:"light_map_ds1000_ds1023"`
+	SchedIDMap      []uint16            `json:"sched_id_map_ds1031_ds1042"`
+	SchedState      []uint16            `json:"sched_state_ds1051_ds1062"`
+	Error           string              `json:"error,omitempty"`
+}
 
 
 // Memory map in the PLC
@@ -60,6 +71,7 @@ type FullConfigurationData struct {
 //              +4  OffTime -- Time span ends (HHMM) 24hr inclusive
 //   DS941 to DS965    - current QROff Time for timed lights (HHMM)  index is light index
 //   DS1000 to DS1023    Mapping of Schedule to use for each light.
+//   DS1031 to DS1042  - Mapping of database schedule ID for each schedule slot in PLC.
 //   DS1051 to DS1062  - State of Schedule (0 = Off, 1 = ON, 2 = QR enabled.
 
 
@@ -85,6 +97,7 @@ const (
     AddrSchedConfigBase = 100 - 1     // Schedule   DS100 to DS939
     AddrQROffTimeBase   = 941 - 1     // QR Timers: DS941 to DS965
     AddrLightSchedMapBase = 1000 - 1  // Light-to-Schedule Mapping: DS1000 to DS1023
+    AddrSchedIDMapBase    = 1031 - 1  // Schedule ID map.
     AddrSchedStateBase = 1051 - 1 // Schedule Runtime State: DS1051 to DS1062 (0=Off, 1=On, 2=QR Enabled)
 )
 
@@ -176,21 +189,43 @@ func PushConfigurationToPLCs(cfg Config, data *FullConfigurationData) error {
 func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 	log.Println("Starting configuration push to all PLCs...")
 
+        // 0. --- Identify Used Schedules ---
+	// We only want to upload schedules that are actually assigned to a zone.
+	usedScheduleIDs := make(map[int]bool)
+	for _, zone := range data.Zones {
+		if zone.ScheduleID > 0 {
+			usedScheduleIDs[zone.ScheduleID] = true
+		}
+	}
+	log.Printf("Found %d active schedules used by zones.", len(usedScheduleIDs))
+
 	// 1. --- Schedule Remapping ---
 	// Create a map of [WordPress_DB_ID] -> [sched_1_to_12]
 	dbID_to_schedID := make(map[int]int)
+
 	// Create a map of [sched_1_to_12] -> [70-register-data-block]
 	plcScheduleBlocks := make(map[int][]uint16)
 
-	for i, schedule := range data.Schedules {
-		schedID := i + 1 // 1-based index
-		if schedID > NumSchedules {
+        //Prepare the Metadata Block (12 registers for DS1031-DS1042)
+	// Initialize with 0s. Index 0 = Slot 1, Index 1 = Slot 2...
+	scheduleIDMetadata := make([]uint16, NumSchedules)
+
+        currentPLCSlot := 1  // 1-based index
+	for _, schedule := range data.Schedules {
+                // FILTER: If this schedule isn't used by any zone, skip it.
+		if !usedScheduleIDs[schedule.ID] {
+			log.Printf("Skipping unused Schedule '%s' (DB ID %d)", schedule.ScheduleName, schedule.ID)
+			continue
+		}
+		if currentPLCSlot > NumSchedules {
 			log.Printf("Warning: More than 12 schedules in WordPress. Ignoring schedule '%s' (ID %d) and beyond.", schedule.ScheduleName, schedule.ID)
 			break
-		}
-		log.Printf("Mapping DB Sched ID %d (%s) -> PLC Sched Slot %d", schedule.ID, schedule.ScheduleName, schedID)
-		dbID_to_schedID[schedule.ID] = schedID
-		plcScheduleBlocks[schedID] = generateScheduleBlock(schedule)
+		} 
+                dbID_to_schedID[schedule.ID] = currentPLCSlot
+		plcScheduleBlocks[currentPLCSlot] = generateScheduleBlock(schedule)
+                scheduleIDMetadata[currentPLCSlot-1] = uint16(schedule.ID)
+                log.Printf("Mapping DB Sched ID %d (%s) -> PLC Sched Slot %d", schedule.ID, schedule.ScheduleName, currentPLCSlot)
+		currentPLCSlot++
 	}
 
 	// 2. --- Map Block Generation (DS1000-DS1023) ---
@@ -265,7 +300,14 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 			}
 		}
 
-		// B. Write the 24-register Map Block
+                // B.  Write Schedule ID Metadata (DS1031-DS1042)
+		log.Printf("  - Writing Schedule ID Metadata (DS1031+) to PLC %d...", plcID)
+		_, err = client.WriteMultipleRegisters(AddrSchedIDMapBase, uint16(len(scheduleIDMetadata)), u16SliceToBytes(scheduleIDMetadata))
+		if err != nil {
+			log.Printf("  - ERROR writing metadata: %v", err)
+		}
+
+		// C. Write the 24-register Map Block (which sched slot to use for each light)
 		mapBlock, ok := plcMaps[plcID]
 		if !ok {
 			log.Printf("  - ERROR: No map block found for PLC %d", plcID)
@@ -376,7 +418,6 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
 
     // 1. Build Lookups
     loopIndexToMapKey := make(map[string]string)
-    plcSlotToDBID := make(map[int]int)
 
     for _, mapping := range configData.Mappings {
         if len(mapping.PLCOutputs) == 0 { continue }
@@ -387,10 +428,6 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
         loopIndexToMapKey[lookupID] = fmt.Sprintf("PLC%d-%s", mapping.PLCID, mapping.PLCOutputs[0])
     }
 
-    for i, schedule := range configData.Schedules {
-        if i < NumSchedules { plcSlotToDBID[i+1] = schedule.ID }
-    }
-
     for plc, host := range cfg.PLCs {
         handler := modbus.NewTCPClientHandler(host)
         handler.Timeout = 5 * time.Second
@@ -399,7 +436,23 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
         if err := handler.Connect(); err != nil { continue }
         defer handler.Close()
 
-        // --- A. Read Light States (C101-C124) ---
+        // 1. Read the Metadata Map  (DS1031-DS1042)
+	plcSlotToDBID := make(map[int]int)
+	
+	resMeta, err := client.ReadHoldingRegisters(AddrSchedIDMapBase, NumSchedules)
+	if err == nil {
+		metaVals := bytesToU16Slice(resMeta)
+		for i, dbID := range metaVals {
+			slotID := i + 1
+			if dbID > 0 {
+				plcSlotToDBID[slotID] = int(dbID)
+			}
+		}
+	} else {
+		log.Printf("PLC %d: Failed to read Schedule Metadata: %v", plc, err)
+	}
+
+        // 2. Read Light States (C101-C124) ---
         resCoils, err := client.ReadCoils(AddrLightStateBase, NumLights)
         if err == nil {
             //log.Printf("PLC %d Addr %d Raw Coil Data: %02x", plc, AddrLightStateBase, resCoils)
@@ -413,18 +466,25 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
         }
         
 
-        // --- B. Read Schedule Mapping (DS1000-DS1023) ---
-        resMap, err := client.ReadHoldingRegisters(AddrLightSchedMapBase, NumLights)
-        if err == nil {
-            scheduleMap := make([]int, NumLights)
-            for i := 0; i < NumLights; i++ {
-                val := int(resMap[i]) // modbus library usually returns []uint16
-                if dbID, ok := plcSlotToDBID[val]; ok { scheduleMap[i] = dbID }
-            }
-            fullStatus[fmt.Sprintf("schedule_map_%d", plc)] = scheduleMap
-        }
+        // 3. Read Schedule Mapping (DS1000-DS1023)
+	// Now uses the map we just read from DS1031!
+	resMap, _ := client.ReadHoldingRegisters(AddrLightSchedMapBase, NumLights)
+	scheduleMap := make([]int, NumLights)
+		
+	if len(resMap) > 0 {
+		mapVals := bytesToU16Slice(resMap)
+		for i, val := range mapVals {
+			// Translate Slot -> DB ID
+			if dbID, ok := plcSlotToDBID[int(val)]; ok {
+				scheduleMap[i] = dbID
+			} else {
+				scheduleMap[i] = 0 // Unknown or Empty
+			}
+		}
+	}
+	fullStatus[fmt.Sprintf("schedule_map_%d", plc)] = scheduleMap
 
-        // --- C. Read QR Timers (DS941-DS965) ---
+        // 4. Read QR Timers (DS941-DS965) ---
         resQR, err := client.ReadHoldingRegisters(AddrQROffTimeBase, NumLights)
         if err == nil {
             // resQR is a []byte. Each register is 2 bytes.
@@ -449,23 +509,20 @@ func ReadStatusFromPLCs(cfg Config, configData *FullConfigurationData) (map[stri
             }
         }
 
-        // --- D. Read Schedule States (DS1051-DS1062) ---
+        // 5. Read Schedule States (DS1051-DS1062) ---
         //  0=Off, 1=On, 2=QR Enabled
-        resBytes, err := client.ReadHoldingRegisters(AddrSchedStateBase, NumSchedules)
-        if err == nil {
-            // Convert the raw bytes back into readable integers
-            resStates := bytesToU16Slice(resBytes) 
-    
-            for i, val := range resStates {
-                slotID := i + 1
-                if dbID, ok := plcSlotToDBID[slotID]; ok {
-                    // Now 'val' is 0, 1, or 2
-                    fullStatus[fmt.Sprintf("Sched%d", dbID)] = int(val)
-                }
-            }
-        }
+        resStatesBytes, _ := client.ReadHoldingRegisters(AddrSchedStateBase, NumSchedules)
+	if len(resStatesBytes) > 0 {
+		resStates := bytesToU16Slice(resStatesBytes)
+		for i, val := range resStates {
+			slotID := i + 1
+			if dbID, ok := plcSlotToDBID[slotID]; ok {
+				fullStatus[fmt.Sprintf("Sched%d", dbID)] = int(val)
+			}
+		}
+	}
 
-        // Read Photocell (C154)
+        // 6. Read Photocell (C154)
         if plc == 1 {
             resPhoto, err := client.ReadCoils(AddrPhotocell, 1)
             if err == nil && len(resPhoto) > 0 {
