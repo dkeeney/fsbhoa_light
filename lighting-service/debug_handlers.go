@@ -24,10 +24,11 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 		PLCID       int                       `json:"plc_id"`
 		Host        string                    `json:"host"`
 		LightStatus []bool                    `json:"light_status_c101"`
-		LightMap    []uint16                  `json:"light_map_ds1000"`       // Added
+		LightMap    []uint16                  `json:"light_map_ds1000"`
 		SchedIDMap  []uint16                  `json:"sched_id_map_ds1031"`
-		SchedState  []uint16                  `json:"sched_state_ds1051"`     // Added
-		Schedules   map[string][]ScheduleSpan `json:"schedules_decoded"`      // Keys are now "01", "02"
+		SchedState  []uint16                  `json:"sched_state_ds1051"`
+		QRTimers    []uint16                  `json:"qr_timers_ds941"`    // <--- Added this line
+		Schedules   map[string][]ScheduleSpan `json:"schedules_decoded"`
 	}
 
 	var response []DebugResponse
@@ -37,7 +38,6 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 		decodedScheds := make(map[string][]ScheduleSpan)
 
 		for idStr, rawInts := range p.ScheduleSpans {
-			// Convert "1" -> 1 -> "01"
 			if id, err := strconv.Atoi(idStr); err == nil {
 				key := fmt.Sprintf("%02d", id)
 				decodedScheds[key] = parseScheduleArray(rawInts)
@@ -48,9 +48,10 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 			PLCID:       p.PLCID,
 			Host:        p.Host,
 			LightStatus: p.LightStatus,
-			LightMap:    p.LightMap,    // Added
+			LightMap:    p.LightMap,
 			SchedIDMap:  p.SchedIDMap,
-			SchedState:  p.SchedState,  // Added
+			SchedState:  p.SchedState,
+			QRTimers:    p.QRTimers,          // <--- Added this line
 			Schedules:   decodedScheds,
 		})
 	}
@@ -88,7 +89,6 @@ func (app *App) GetRawPLCData() []RawPLCData {
 
 	for key, host := range app.Config.PLCs {
 		
-		// Parse ID safely from config key
 		plcID, _ := strconv.Atoi(fmt.Sprintf("%v", key))
 
 		client, err := modbus.NewClient(&modbus.ClientConfiguration{
@@ -111,7 +111,6 @@ func (app *App) GetRawPLCData() []RawPLCData {
 		}
 
 		// --- Read Coils ---
-		// AddrLightStateBase (16484)
 		if coils, err := client.ReadCoils(uint16(AddrLightStateBase), NumLights); err == nil {
 			data.LightStatus = coils
 		} else {
@@ -120,7 +119,7 @@ func (app *App) GetRawPLCData() []RawPLCData {
 
 		// --- Read Holding Registers ---
 
-		// 1. Schedule Spans (Addr 99)
+		// 1. Schedule Spans
 		regsPerSched := uint16(NumSpans * 5)
 		for j := 0; j < NumSchedules; j++ {
 			offset := uint16(j) * regsPerSched
@@ -132,22 +131,22 @@ func (app *App) GetRawPLCData() []RawPLCData {
 			}
 		}
 
-		// 2. Schedule ID Map (Addr 1030)
+		// 2. Schedule ID Map
 		if regs, err := client.ReadRegisters(uint16(AddrSchedIDMapBase), NumSchedules, modbus.HOLDING_REGISTER); err == nil {
 			data.SchedIDMap = regs
 		}
 
-		// 3. Light Map (Addr 999) - Added to output
+		// 3. Light Map
 		if regs, err := client.ReadRegisters(uint16(AddrLightSchedMapBase), NumLights, modbus.HOLDING_REGISTER); err == nil {
 			data.LightMap = regs
 		}
 
-		// 4. Schedule State (Addr 1050) - Added to output
+		// 4. Schedule State
 		if regs, err := client.ReadRegisters(uint16(AddrSchedStateBase), NumSchedules, modbus.HOLDING_REGISTER); err == nil {
 			data.SchedState = regs
 		}
 
-		// 5. QR Timers
+		// 5. QR Timers (DS941 - DS965)
 		if regs, err := client.ReadRegisters(uint16(AddrQROffTimeBase), 25, modbus.HOLDING_REGISTER); err == nil {
 			data.QRTimers = regs
 		}
