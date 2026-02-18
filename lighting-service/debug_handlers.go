@@ -23,6 +23,7 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 	type DebugResponse struct {
 		PLCID       int                       `json:"plc_id"`
 		Host        string                    `json:"host"`
+                TotalSpans  uint16                    `json:"total_spans_ds99"`
 		LightStatus []bool                    `json:"light_status_c101"`
 		LightMap    []uint16                  `json:"light_map_ds1000"`
 		SchedIDMap  []uint16                  `json:"sched_id_map_ds1031"`
@@ -47,6 +48,7 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 		response = append(response, DebugResponse{
 			PLCID:       p.PLCID,
 			Host:        p.Host,
+                        TotalSpans:  p.TotalSpanCount,
 			LightStatus: p.LightStatus,
 			LightMap:    p.LightMap,
 			SchedIDMap:  p.SchedIDMap,
@@ -76,6 +78,7 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 type RawPLCData struct {
 	PLCID         int
 	Host          string
+        TotalSpanCount uint16
 	LightStatus   []bool
 	ScheduleSpans map[string][]uint16
 	QRTimers      []uint16
@@ -118,8 +121,13 @@ func (app *App) GetRawPLCData() []RawPLCData {
 		}
 
 		// --- Read Holding Registers ---
+                // 1. Total Spans (DS99 / Addr 98) <--- Added
+		// We read 1 register at address 98
+		if regs, err := client.ReadRegisters(98, 1, modbus.HOLDING_REGISTER); err == nil && len(regs) > 0 {
+			data.TotalSpanCount = regs[0]
+		}
 
-		// 1. Schedule Spans
+		// 2. Schedule Spans
 		regsPerSched := uint16(NumSpans * 5)
 		for j := 0; j < NumSchedules; j++ {
 			offset := uint16(j) * regsPerSched
@@ -131,22 +139,22 @@ func (app *App) GetRawPLCData() []RawPLCData {
 			}
 		}
 
-		// 2. Schedule ID Map
+		// 3. Schedule ID Map
 		if regs, err := client.ReadRegisters(uint16(AddrSchedIDMapBase), NumSchedules, modbus.HOLDING_REGISTER); err == nil {
 			data.SchedIDMap = regs
 		}
 
-		// 3. Light Map
+		// 4. Light Map
 		if regs, err := client.ReadRegisters(uint16(AddrLightSchedMapBase), NumLights, modbus.HOLDING_REGISTER); err == nil {
 			data.LightMap = regs
 		}
 
-		// 4. Schedule State
+		// 5. Schedule State
 		if regs, err := client.ReadRegisters(uint16(AddrSchedStateBase), NumSchedules, modbus.HOLDING_REGISTER); err == nil {
 			data.SchedState = regs
 		}
 
-		// 5. QR Timers (DS941 - DS965)
+		// 6. QR Timers (DS941 - DS965)
 		if regs, err := client.ReadRegisters(uint16(AddrQROffTimeBase), 25, modbus.HOLDING_REGISTER); err == nil {
 			data.QRTimers = regs
 		}

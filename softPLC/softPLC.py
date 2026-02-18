@@ -1,3 +1,9 @@
+# softPLC  - A Click PLC emulator
+#   Console:  http://testbed.fsbhoa.com:8020/
+#             http://testbed.fsbhoa.com:8021/
+#   Configuration file: plc_config_lodge.json or plc_config_cabana.json
+#   python3 softPLC.py plc_config_lodge.json
+#
 import re
 import os
 import asyncio
@@ -472,8 +478,19 @@ class LogicEngine:
                 args = act['args']
 
                 if inst == "FOR" and cond_passed:
-                    count_match = re.search(r'\d+', args)
-                    count = int(count_match.group()) if count_match else 1
+                    # Clean the argument (remove comments/whitespace)
+                    arg_val = args.split('//')[0].strip()
+                    
+                    # Check if the first character is a digit
+                    if arg_val[0].isdigit():
+                        count = int(arg_val)
+                    else:
+                        # Resolve the memory address (e.g., "DS99")
+                        count = self.mem.read(arg_val)
+    
+                    # Safety: Clamp to 1 to prevent infinite loops or empty stacks
+                    count = max(int(count), 1)
+    
                     loop_stack.append({"start": ptr, "curr": 1, "max": count})
                     self.mem.append_display(f"[FOR {count}]")
                     
@@ -1020,14 +1037,14 @@ DASHBOARD_HTML = """
     <div class="panel">
         <h3>System Registers & Control Bits</h3>
         <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
-            {% for b in ['T1', 'T2', 'C151', 'C152', 'C153', 'C154', 'C1002', 'C1003', 'C1005', 'C1008', 'C1009', 'C1010'] %}
+            {% for b in ['T1', 'T2', 'C151', 'C152', 'C153', 'C154', 'C1002', 'C1003', 'C1005', 'C1008', 'C1009', 'C1010', 'C1000'] %}
             <form action="/toggle_bit/{{b}}" method="post">
                 <button type="submit" class="toggle-btn {{ 'on' if mem.read(b) else 'off' }}">{{ b }}</button>
             </form>
             {% endfor %}
         </div>
         <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
-            {% for ds in ['DS1','DS2', 'DS3', 'DS4', 'DS5'] %}
+            {% for ds in ['DS99','DS2', 'DS3', 'DS4', 'DS5', 'DS21', 'DH49', 'DS56'] %}
                 <div> {{ds}} = {{ mem.read(ds) }}</div>
             {% endfor %}
         </div>

@@ -91,6 +91,7 @@ const (
     AddrRequestOffBase = cBitBaseAddress + (251 - 1) // C251-C274: Manual OFF
 
     // --- Holding Registers (Integers) ---
+    AddrTotalSpans = 99 - 1 // DS99  the total number of spans in all schedules.
     
     // Schedule Config: 12 schedules * 14 spans * 5 words per span
     // DS100 to DS939
@@ -149,18 +150,23 @@ func calculateLoopIndex(yOutput string) int {
 
 // ---  HELPER: generateScheduleBlock ---
 // Creates the 70-register block for a single schedule
-func generateScheduleBlock(schedule FullConfigSchedule) []uint16 {
+func generateScheduleBlock(schedule FullConfigSchedule) ([]uint16, uint16) {
 	scheduleBlock := make([]uint16, NumSpans*5) // 14 spans * 5 regs
-	for i, span := range schedule.Spans {
-		if i >= NumSpans {
+        var spansUsed uint16 = 0;
+	for _, span := range schedule.Spans {
+		if spansUsed >= NumSpans {
 			break
 		} // Max 14 spans
-		offset := i * 5
-		scheduleBlock[offset+0] = daysToBitmask(span.DaysOfWeek)
-		scheduleBlock[offset+1], scheduleBlock[offset+2] = triggerToPLCData(span.OnTrigger, span.OnTime)
-		scheduleBlock[offset+3], scheduleBlock[offset+4] = triggerToPLCData(span.OffTrigger, span.OffTime)
+                mask := daysToBitmask(span.DaysOfWeek)
+                if mask != 0 {
+		    offset := int(spansUsed) * 5
+		    scheduleBlock[offset+0] = daysToBitmask(span.DaysOfWeek)
+		    scheduleBlock[offset+1], scheduleBlock[offset+2] = triggerToPLCData(span.OnTrigger, span.OnTime)
+		    scheduleBlock[offset+3], scheduleBlock[offset+4] = triggerToPLCData(span.OffTrigger, span.OffTime)
+                    spansUsed++
+                }
 	}
-	return scheduleBlock
+	return scheduleBlock, spansUsed
 }
 
 
@@ -210,8 +216,10 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 	// Initialize with 0s. Index 0 = Slot 1, Index 1 = Slot 2...
 	scheduleIDMetadata := make([]uint16, NumSchedules)
 
+        var totalGlobalSpans uint16 = 0
         currentPLCSlot := 1  // 1-based index
 	for _, schedule := range data.Schedules {
+                var count uint16
                 // FILTER: If this schedule isn't used by any zone, skip it.
 		if !usedScheduleIDs[schedule.ID] {
 			log.Printf("Skipping unused Schedule '%s' (DB ID %d)", schedule.ScheduleName, schedule.ID)
@@ -222,9 +230,10 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 			break
 		} 
                 dbID_to_schedID[schedule.ID] = currentPLCSlot
-		plcScheduleBlocks[currentPLCSlot] = generateScheduleBlock(schedule)
+		plcScheduleBlocks[currentPLCSlot], count = generateScheduleBlock(schedule)
                 scheduleIDMetadata[currentPLCSlot-1] = uint16(schedule.ID)
                 log.Printf("Mapping DB Sched ID %d (%s) -> PLC Sched Slot %d", schedule.ID, schedule.ScheduleName, currentPLCSlot)
+                totalGlobalSpans += count
 		currentPLCSlot++
 	}
 
@@ -284,6 +293,14 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 			continue
 		}
 		defer handler.Close()
+
+                // 0. Write Total Spans (DS99)
+                ds99Data := []uint16{totalGlobalSpans}
+                _, err = client.WriteMultipleRegisters(uint16(AddrTotalSpans), 1, u16SliceToBytes(ds99Data))
+                if err != nil {
+                    log.Printf("Error writing Total Spans (DS99) to PLC %s: %v", host, err)
+                    // Decide if you want to 'continue' or try to write the rest anyway
+                }
 
 		// A. Write all 12 Schedule Blocks
 		log.Printf("  - Writing 12 schedule blocks to PLC %d...", plcID)
