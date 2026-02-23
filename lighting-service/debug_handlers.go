@@ -199,9 +199,6 @@ func decodeDays(mask uint16) string {
 	if mask == 0 {
 		return "Never"
 	}
-	if mask == 127 {
-		return "Every Day"
-	}
 	dayNames := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 	var activeDays []string
 	for i := 0; i < 7; i++ {

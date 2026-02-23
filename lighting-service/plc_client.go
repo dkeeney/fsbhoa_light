@@ -229,8 +229,13 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 			log.Printf("Warning: More than 12 schedules in WordPress. Ignoring schedule '%s' (ID %d) and beyond.", schedule.ScheduleName, schedule.ID)
 			break
 		} 
+                block, count := generateScheduleBlock(schedule)
+                if count == 0 {
+                        log.Printf("Skipping used Schedule '%s' (DB ID %d) because it contains no valid spans.", schedule.ScheduleName, schedule.ID)
+			continue
+                }
                 dbID_to_schedID[schedule.ID] = currentPLCSlot
-		plcScheduleBlocks[currentPLCSlot], count = generateScheduleBlock(schedule)
+		plcScheduleBlocks[currentPLCSlot] = block
                 scheduleIDMetadata[currentPLCSlot-1] = uint16(schedule.ID)
                 log.Printf("Mapping DB Sched ID %d (%s) -> PLC Sched Slot %d", schedule.ID, schedule.ScheduleName, currentPLCSlot)
                 totalGlobalSpans += count

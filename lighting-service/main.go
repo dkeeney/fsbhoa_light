@@ -19,6 +19,8 @@ type Config struct {
         AccessControlAPIKey    string         `json:"AccessControlAPIKey"`
         AccessControlURL       string         `json:"AccessControlURL"`
 	QRCodeActuatedDuration int            `json:"QRCodeActuatedDuration"`
+        Latitude               float64        `json:"Latitude"`
+        Longitude              float64        `json:"Longitude"`
 }
 
 

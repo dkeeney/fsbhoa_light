@@ -49,7 +49,7 @@ func (app *App) StartBluehostPoller() {
                             duration := app.Config.QRCodeActuatedDuration
                             if duration == 0 { duration = 90 }
 
-                            allowed, reason := isQRRequestAllowed(app.PLCConfig, job.ZoneID, duration)
+                            allowed, reason := isQRRequestAllowed(app.Config, app.PLCConfig, job.ZoneID, duration)
                             if !allowed {
                                 log.Printf("Job #%d REJECTED: %s", job.JobID, reason)
             
@@ -102,8 +102,8 @@ func (app *App) updateJobStatusOnBluehost(jobID int, newStatus string) {
 
 // Helper: Performs the actual HTTP request to Bluehost
 func performLongPoll(client *http.Client, cfg Config) (*PollResponse, error) {
-        // Note: Ensure cfg.BluehostURL includes the base path to wait_for_job.php
-        url := fmt.Sprintf("%s/wait_for_job.php", cfg.BluehostURL)
+        // Note: Ensure cfg.BluehostURL includes the base path to wait_for_job
+        url := fmt.Sprintf("%swait-for-job", cfg.BluehostURL)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -152,8 +152,8 @@ func verifyLocalSwipe(cfg Config, email string) bool {
 
 
 func (app *App) reportStatus(jobID int, status string) {
-	// Note: Using /update_job.php to match your Bluehost folder structure
-	apiURL := fmt.Sprintf("%s/update_job.php?job_id=%d&status=%s",
+	// Note: Using /update_job to match your Bluehost folder structure
+	apiURL := fmt.Sprintf("%supdate-job?job_id=%d&status=%s",
 		app.Config.BluehostURL, jobID, status)
 
 	req, _ := http.NewRequest("POST", apiURL, nil)
@@ -169,7 +169,7 @@ func (app *App) reportStatus(jobID int, status string) {
 }
 
 // Check if at least part of the QR request duration will fall within a QR Enabled window.
-func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationMinutes int) (bool, string) {
+func isQRRequestAllowed(cfg Config, configData *FullConfigurationData, zoneID int, durationMinutes int) (bool, string) {
 	// 1. Find the Zone and Schedule
 	var targetZone *FullConfigZone
 	for _, z := range configData.Zones {
@@ -189,31 +189,52 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 	}
 	if targetSched == nil { return false, "schedule_not_found" }
 
-	// 2. Current Time Context
+        // 2. Current Time Context
 	now := time.Now()
-	today := strings.ToLower(now.Format("Mon")) // Note: Capital "M" for Format
+	today := strings.ToLower(now.Format("Mon"))
 	currentPLC := uint16(now.Hour()*100 + now.Minute())
-	
+
 	endTime := now.Add(time.Duration(durationMinutes) * time.Minute)
 	endPLC := uint16(endTime.Hour()*100 + endTime.Minute())
+        lat := cfg.Latitude
+        lon := cfg.Longitude
+        // Safety Fallback: If config is missing them, default to Lodge coords
+        if lat == 0 && lon == 0 {
+                lat = 35.3733
+                lon = -119.0187
+        }
 
-	// Constants for Photocell "Safety Window" (Bakersfield Buffer)
-	const PhotoStart uint16 = 1600 // 4:00 PM
-	const PhotoEnd   uint16 = 630  // 6:30 AM
+	// --- DYNAMIC SUNSET / SUNRISE (Bakersfield, CA) ---
+	// Coordinates: Latitude ~35.37, Longitude ~-119.01
+	riseUTC, setUTC := sunrise.SunriseSunset(lat, lon, now.Year(), now.Month(), now.Day())
+	
+	// Convert UTC to local server time
+	rise := riseUTC.In(time.Local)
+	set := setUTC.In(time.Local)
+
+	// Define an early acceptance window (e.g., allow scan 60 mins before schedule start)
+	earlyBuffer := 60 * time.Minute
+
+	// Calculate dynamic Photocell bounds with the early buffer applied
+	bufferedSet := set.Add(-earlyBuffer)
+	PhotoStart := uint16(bufferedSet.Hour()*100 + bufferedSet.Minute())
+	PhotoEnd := uint16(rise.Hour()*100 + rise.Minute())
+
+	log.Printf("DEBUG SOLAR: Using Lat: %f, Lon: %f", lat, lon)
+        log.Printf("DEBUG SOLAR: Actual Sunrise: %s | Actual Sunset: %s", rise.Format("15:04"), set.Format("15:04"))
+        log.Printf("DEBUG SOLAR: Early Buffer Applied: %s", bufferedSet.Format("15:04"))
+        log.Printf("DEBUG SOLAR: PLC Integer Targets -> PhotoStart: %d | PhotoEnd: %d", PhotoStart, PhotoEnd)
 
 	// 3. Check Spans
-        qrSpanDefined := false // Track if we find ANY QR-enabled spans
+	qrSpanDefined := false // Track if we find ANY QR-enabled spans
 	for _, span := range targetSched.Spans {
-                // Check if this span is even a QR type
 		trig := strings.ToUpper(span.OnTrigger)
 		isQRType := (trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" || trig == "QR_TIME")
 		if !isQRType {
 			continue
 		}
 
-		// If we are here, at least one QR span exists in the schedule
 		qrSpanDefined = true
-
 		dayMatch := false
 		for _, d := range span.DaysOfWeek {
 			if strings.ToLower(d) == today {
@@ -230,10 +251,17 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 			sEnd = PhotoEnd
 		} else if trig == "QR_TIME" {
 			if span.OnTime == nil || span.OffTime == nil { continue }
-			// Clean the "HH:MM" string to "HHMM"
+			
 			sVal, _ := strconv.Atoi(strings.ReplaceAll(*span.OnTime, ":", ""))
 			eVal, _ := strconv.Atoi(strings.ReplaceAll(*span.OffTime, ":", ""))
-			sStart = uint16(sVal)
+			
+			// Safely subtract the buffer using base-60 time math
+			hours := sVal / 100
+			mins := sVal % 100
+			startTimeObj := time.Date(now.Year(), now.Month(), now.Day(), hours, mins, 0, 0, time.Local)
+			bufferedStart := startTimeObj.Add(-earlyBuffer)
+			
+			sStart = uint16(bufferedStart.Hour()*100 + bufferedStart.Minute())
 			sEnd = uint16(eVal)
 		} else {
 			continue
@@ -253,12 +281,11 @@ func isQRRequestAllowed(configData *FullConfigurationData, zoneID int, durationM
 		}
 	}
 
-        if !qrSpanDefined {
-		return false, "qr_not_defined" // No QR spans exist in this schedule at all
+	if !qrSpanDefined {
+		return false, "qr_not_defined"
 	}
 
-	return false, "outside_qr_window"
-}
+	return false, "outside_qr_window"}
 
 
 
