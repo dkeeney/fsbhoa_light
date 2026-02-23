@@ -9,6 +9,8 @@ import (
         "strconv"
         "strings"
 	"time"
+
+        "github.com/nathan-osman/go-sunrise"
 )
 
 // PollResponse matches the JSON returned by the Bluehost PHP script
