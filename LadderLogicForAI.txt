@@ -2,7 +2,7 @@
 //  LODGE Lighting controller Ladder Logic
 //  David Keeney, Nov 9, 2025
 //  User Account:   admin,  bakersfield12
-//  Version 2, Adds timed lights for QR codes
+//  Version 2.1, Adds timed lights for QR codes
 //
 // Note:  This hardware has the following restrictions:
 //   No nested Loops or subroutines
@@ -12,6 +12,23 @@
 //  The IPAddress for the master is hard coded as 192.168.42.61.  So during installation
 //  be sure to configure the master's IP Address as static so the slave can find it.
 //
+// The UI sends the configuration for schedules and lights to the GO service.
+// The Go service distributes them out to the PLCs.  The UI can query the Go
+// service for status and the Go service queries the PLC's and returns it to
+// the UI.
+//
+// The Ladder Logic below does the following:
+// The main loop loops through the lights, turning on or off lights when there
+// is an OnRequest or an OffRequest. The SCHED_ENGINE subroutine loops through
+// the schedules, looking only at the active spans (those with day bits on)
+// to determine the schedule state. The ACTION_ENGINE uses the schedule states
+// and QROff times, to determine if it should set an ONRequest or an OffRequest
+// to pulse the relays. The Go service can also set OnRequests and OffRequests to
+// perform manual override. It can also force the main loop to set all lights
+// to the current schedule state by setting C151.
+//
+// Each light is mapped to a schedule.  For reference, there is a mapping of
+// the UI's ID for a schedule and the slot in which it resides. DS1031 to DS1042.
 //
 
 
@@ -69,8 +86,8 @@ Rung 8: [SC2] -> (COPY DS6 -> DS3) // Init Sequencer
 // Output & Pulse Engine   (Sequencer)
 // ---------------------------------
 // Sequencer Counter (Increments every scan)
-// Loop through all (16 or 24) output pairs.  There are 48 relays on Lodge and 32 at the 
-// Cabana but may are used together so only 16 or 24j relay drivers (H-Bridges) need 
+// Loop through all (16 or 24) output pairs.  There are 48 relays on Lodge and 32 at the
+// Cabana but may are used together so only 16 or 24j relay drivers (H-Bridges) need
 // to be used.
 // For debugging, If we want to hold the loop (DS3) on one output pair, set C1022 then set DS3.
 // If we are not busy with a pulse [NOT C1005], advance to next output pair.
@@ -190,10 +207,13 @@ Rung 32: [Always] -> (END)
 // ---------------------------------
 // Start  Schedule Loop
 //
-// Process all of the Schedules and the schedule segments in them.
+// Process all of the Schedules and the schedule spans in them.
 // There is a max of 12 schedules with up to 14 spans per schedule.
-// Start the single, flattened loop (12 * 14 = 168)
-// Iterate through the schedule segments.
+// Iterate through the spans of a schedule (DS2).  When it finds an
+// unused span it skips the remaining spans in that schedule and goes
+// to the next schedule (DS4).  DS99 is the total number of active
+// spans so the FOR should terminate after processing the last span.
+
 // Assumptions:
 //  1) All schedules have at least 1 span but no more than 14.
 //  2) All spans are grouped together starting at the beginning of schedule
@@ -291,7 +311,7 @@ Rung 38: [Always] -> (RET)
 //=================================================================================
 ## Subroutine: ACTION_ENGINE
 
-// Determines if lights should be turned ON or OFF due to sched transitions or QR 
+// Determines if lights should be turned ON or OFF due to sched transitions or QR
 // Each Light (actually the H-Bridge that drives a set of relays)
 // All lights must have a reference to a schedule if active.
 
@@ -304,7 +324,7 @@ Rung 3:  [Always] -> (MATH DS20 = DS5 + 999)   // pointer to mapping of schedule
 Rung 4:  [Always] -> (COPY DS[DS20] -> DS50)   // index of  schedule for this light (0-12)
 
 // If this light is not used (no schedule) guard against bad calculations.
-Rung 5:  [CMP DS50 > 0] -> (OUT C1021) 
+Rung 5:  [CMP DS50 > 0] -> (OUT C1021)
 
 Rung 6:  [C1021] -> (MATH DS51 = (DS50 - 1)*70 + 101)  // Ptr to OnTrig on Schedule's first Span
 Rung 7:  [C1021] -> (MATH DS10 = DS50 + 1050)  // pointer to curr state of schedule for this light
@@ -320,11 +340,11 @@ Rung 16: [C1021] -> (COPY DS[DS22] -> DS23)   // value of prev QREnd (HHMM) (fro
 
 // == Schedule Transition Check ==
 //   CASE 1, transition to scheduleON   -> RequestON  and kill QREnd
-Rung 17: [C1021] [OR [C152] [CMP DS56 != DS57]] [CMP DS56 == 1] -> (COPY SC1 -> C[DS16])   // ReqON
+Rung 17: [C1021] [CMP DS56 == 1] [OR [C152] [CMP DS56 != DS57]] -> (COPY SC1 -> C[DS16])   // ReqON
                              (parallel) -> (COPY 0 -> DS[DS18])    // clear QREnd
 
 //   CASE 2, Transition to scheduleOFF  -> RequestOFF and kill QREnd
-Rung 18: [C1021] [OR [C152] [CMP DS56 != DS57]] [CMP DS56 == 0] -> (COPY SC1 -> C[DS17])   // ReqOFF
+Rung 18: [C1021] [CMP DS56 == 0] [OR [C152] [CMP DS56 != DS57]] -> (COPY SC1 -> C[DS17])   // ReqOFF
                              (parallel) --> (COPY 0 -> DS[DS18])
 
 //   CASE 3, in scheduleQR and QREnd expires -> RequestOFF
@@ -334,7 +354,7 @@ Rung 19: [C1021] [DS56 == 2] [CMP DS19 > 0] [CMP DS19 < DS30] -> (COPY SC1 -> C[
 Rung 20: [C1021] [CMP DS19 > 0] [CMP DS19 < DS30]  -> (COPY 0 -> DS[DS18])    // clear QREnd
 
 //   CASE 5, Transition to scheduleQR and QREnd exists -> RequestON
-Rung 21: [C1021] [CMP DS56 == 2] [OR [C152] [CMP DS56 != DS57]] [CMP DS19 != 0] [CMP DS19 > DS30]  -> (COPY SC1 -> C[DS16])   // ReqON
+Rung 21: [C1021] [CMP DS56 == 2] [OR [C152] [CMP DS56 != DS57]] [CMP DS19 > DS30]  -> (COPY SC1 -> C[DS16])   // ReqON
 
 //   CASE 6, in scheduleQR and new QREnd -> RequestON
 Rung 22: [C1021] [CMP DS56 == 2] [CMP DS19 != 0] [CMP DS19 != DS23] [CMP DS19 > DS30]  -> (COPY SC1 -> C[DS16])   // ReqON
@@ -398,13 +418,13 @@ C1022 - Debug mode (holds DS3 constant)
 T1       - Pulse high duration timer
 T2       - Pulse dead time duration timer
 
-DS1    - 
+DS1    -
 DS2    - Span index 1 - 14
 DS3    - Loop Counter for main loop (1 to 16 or 24)
 DS4    - Loop Counter for Schedule (1 to 12)
 DS5    - Loop Counter for Action Engine (1 to 16 or 24)
 DS6    - Max lights (16 or 24)
-DS10  - Ptr to Sched State 
+DS10  - Ptr to Sched State
 DS11  - Ptr to Prev State
 DS15  - Ptr to Current State for an output(light)
 DS16  - Ptr to RequstON for an output (light)
@@ -428,7 +448,7 @@ DS49  - Schedule Day of week bitmap
 DS50  - temp index of Scedule
 DS51  - Ptr to OnTrig for first span of Schedule.
 DS52  - temp value of OnTrig.
-DS53  - 
+DS53  -
 DS56  - temp Curr Schedule State (0 = OFF,1 = ON, 2 = QR Enabled)
 DS57  - temp Prev Schedule State
 DS80  - temp which output module to write to (16 outputs each)
@@ -454,5 +474,6 @@ DH81  - temp HEX value 1
 DH82  - temp HEX which output on the module.
 DH83  - temp HEX ON bitmask (which output to turn on)
 DH84  - temp HEX OFF bitmask (which output to turn off)
+
 
 

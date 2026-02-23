@@ -86,6 +86,22 @@ class Fsbhoa_Lighting_Admin_Settings {
 			'placeholder' => $this->default_log_path
 		]
 	);
+        add_settings_field(
+            'latitude',
+            'Lodge Latitude',
+            array($this, 'render_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_service',
+            ['id' => 'latitude', 'type' => 'number', 'step' => '0.000001', 'default' => 35.3733, 'desc' => 'Geographic latitude for sunset calculations (e.g., 35.3733).']
+        );
+        add_settings_field(
+            'longitude',
+            'Lodge Longitude',
+            array($this, 'render_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_service',
+            ['id' => 'longitude', 'type' => 'number', 'step' => '0.000001', 'default' => -119.0187, 'desc' => 'Geographic longitude for sunset calculations (e.g., -119.0187).']
+        );
         add_settings_field('plc1_address', 'PLC #1 Address (Lodge)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc1_address', 'placeholder' => 'e.g., 192.168.1.201:502']);
         add_settings_field('plc2_address', 'PLC #2 Address (Pool)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc2_address', 'placeholder' => 'e.g., 192.168.1.202:502']);
         add_settings_field(
@@ -201,6 +217,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         $desc    = $args['desc'] ?? '';
         $value   = isset($options[$id]) ? $options[$id] : $default;
         $placeholder = $args['placeholder'] ?? '';
+        $step    = isset($args['step']) ? ' step="' . esc_attr($args['step']) . '"' : '';
 
         printf(
             '<input type="%s" name="%s[%s]" value="%s" class="%s" placeholder="%s">',
@@ -208,8 +225,9 @@ class Fsbhoa_Lighting_Admin_Settings {
             esc_attr($this->option_name), // e.g., fsbhoa_lighting_settings[go_service_port]
             esc_attr($id),
             esc_attr($value),
-            ($type === 'number') ? 'small-text' : 'regular-text',
-            esc_attr($placeholder)
+            ($type === 'number') ? 'regular-text' : 'regular-text', // Changed to regular-text so coordinates fit
+            esc_attr($placeholder),
+            $step
         );
         if ($desc) {
             echo '<p class="description">' . esc_html($desc) . '</p>';
@@ -254,6 +272,8 @@ class Fsbhoa_Lighting_Admin_Settings {
         $output['go_service_port'] = isset( $input['go_service_port'] ) ? absint( $input['go_service_port'] ) : 8085;
         $output['bluehost_qr_url'] = isset( $input['bluehost_qr_url'] ) ? esc_url_raw( $input['bluehost_qr_url'] ) : $this->default_bluehost_qr_url;
         $output['qr_code_actuated_duration'] = isset( $input['qr_code_actuated_duration'] ) ? absint( $input['qr_code_actuated_duration'] ) : 90;
+        $output['latitude'] = isset( $input['latitude'] ) ? floatval( $input['latitude'] ) : 35.3733;
+        $output['longitude'] = isset( $input['longitude'] ) ? floatval( $input['longitude'] ) : -119.0187;
         $output['bluehost_url'] = isset( $input['bluehost_url'] ) ? esc_url_raw( $input['bluehost_url'] ) : $this->default_bluehost_url;
         $output['bluehost_api_key'] = isset( $input['bluehost_api_key'] ) ? sanitize_text_field( $input['bluehost_api_key'] ) : '';
         $output['log_file_path'] = isset( $input['log_file_path'] ) ? sanitize_text_field( $input['log_file_path'] ) : $this->default_log_path;
@@ -284,6 +304,8 @@ class Fsbhoa_Lighting_Admin_Settings {
         $config = [
             'ListenPort' => ':' . ($options['go_service_port'] ?? 8085), // Go expects ":port" format
             'QRCodeActuatedDuration' => isset($options['qr_code_actuated_duration']) ? (int)$options['qr_code_actuated_duration'] : 90,
+            'Latitude' => isset($options['latitude']) ? (float)$options['latitude'] : 35.3733,
+            'Longitude' => isset($options['longitude']) ? (float)$options['longitude'] : -119.0187,
             'BluehostURL'     => $options['bluehost_url'] ?? '',
             'BluehostAPIKey'  => $options['bluehost_api_key'] ?? '',
             'LogFilePath' => $options['log_file_path'] ?? $this->default_log_path,

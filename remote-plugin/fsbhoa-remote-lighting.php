@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: FSBHOA Remote Lighting (Bluehost)
+ * Plugin Name: FSBHOA Remote Lighting (QR scan)
  * Description: Handles court lighting requests via QR Code (Auto-Trigger).
  * Version: 1.3
  * Author: FSBHOA IT Committee
@@ -25,6 +25,7 @@ register_activation_hook( __FILE__, function() {
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY  (id)
+        KEY idx_status (status)
     ) $charset_collate;";
     require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
     dbDelta( $sql );
@@ -186,8 +187,8 @@ function fsbhoa_handle_light_request() {
     $table_name = $wpdb->prefix . 'lighting_queue';
 
     $existing_job = $wpdb->get_row( $wpdb->prepare( "
-        SELECT id, status FROM $table_name 
-        WHERE zone_id = %d AND user_email = %s 
+        SELECT id, status FROM $table_name
+        WHERE zone_id = %d AND user_email = %s
         AND (status IN ('pending', 'processing') OR (status = 'success' AND updated_at > DATE_SUB(NOW(), INTERVAL 2 MINUTE)))
         ORDER BY created_at DESC LIMIT 1
     ", $zone_id, $current_user->user_email ) );
@@ -210,5 +211,125 @@ add_action( 'wp_ajax_fsbhoa_check_status', function() {
     $status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM " . $wpdb->prefix . "lighting_queue WHERE id = %d", $job_id ) );
     wp_send_json_success( array( 'status' => $status ) );
 });
+
+
+/**
+ * 6. REST API ENDPOINTS    (Accessed by fsbhoa-lighting service)
+ */
+/**
+ * CORRECTED REST API REGISTRATION
+ */
+add_action( 'rest_api_init', function () {
+
+    // The namespace for our routes
+    $namespace = 'lights/v1';
+
+    // 1. Wait for Job Route
+    register_rest_route( $namespace, '/wait-for-job', array(
+        'methods'             => 'GET',
+        'callback'            => 'fsbhoa_handle_rest_wait_for_job',
+        'permission_callback' => '__return_true',
+    ));
+
+    // 2. Update Job Route
+    register_rest_route( $namespace, '/update-job', array(
+        'methods'             => 'POST',
+        'callback'            => 'fsbhoa_handle_rest_update_job',
+        'permission_callback' => '__return_true',
+    ));
+
+    // 3. Debug Route
+    register_rest_route( $namespace, '/debug-db', array(
+        'methods'  => 'GET',
+        'callback' => function() {
+            global $wpdb;
+            $table = $wpdb->prefix . 'lighting_queue';
+            $results = $wpdb->get_results("SELECT * FROM $table ORDER BY id DESC LIMIT 10");
+            return rest_ensure_response($results);
+        },
+        'permission_callback' => '__return_true',
+    ));
+});
+
+// Implementation of wait_for_job.php
+function fsbhoa_handle_rest_wait_for_job( $request ) {
+    if ( session_id() ) {
+        session_write_close();
+    }
+
+    $valid_key = defined('FSBHOA_LIGHTING_API_KEY') ? FSBHOA_LIGHTING_API_KEY : '733KjVR4jkBGnoBEDLbC1rvCqxF7gMdz6ygbxRjCM+Y=';
+    $provided_key = $request->get_header('X-API-Key');
+
+    if ( $provided_key !== $valid_key ) {
+        return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
+    }
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'lighting_queue';
+    $start_time = time();
+    $max_wait = 15;
+
+    // database cleanup
+    $wpdb->query( "DELETE FROM $table_name WHERE updated_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)" );
+
+    while ((time() - $start_time) < $max_wait) {
+        $wpdb->query("START TRANSACTION");
+        $job = $wpdb->get_row("SELECT * FROM $table_name WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1 FOR UPDATE");
+
+        try {
+            if ($job) {
+                $wpdb->update($table_name, array('status' => 'processing'), array('id' => $job->id));
+                if ($updated === false) {
+                    // DATABASE ERROR: Rollback immediately!
+                    $wpdb->query("ROLLBACK");
+                    error_log("FSBHOA LIGHTING ERROR: Failed to update job ID " . $job->id);
+                    return new WP_Error( 'db_error', 'Database update failed', array( 'status' => 500 ) );
+                }
+                $wpdb->query("COMMIT");
+                return new WP_REST_Response(array(
+                    "status" => "found",
+                    "job_id" => (int)$job->id,
+                    "zone_id"  => (int)$job->zone_id,
+                    "email"  => $job->user_email
+                ), 200);
+            }
+            $wpdb->query("ROLLBACK");
+
+       } catch (Exception $e) {
+            // EMERGENCY CLEANUP
+            $wpdb->query("ROLLBACK");
+            error_log("FSBHOA LIGHTING EXCEPTION: " . $e->getMessage());
+            // Wait a bit before retrying to avoid hammering a sick DB
+            sleep(1); 
+       }
+       // wait before next poll of database.
+       sleep(2);
+
+    }
+    return new WP_REST_Response(array("status" => "timeout"), 200);
+}
+
+// Implementation of update_job.php
+function fsbhoa_handle_rest_update_job( $request ) {
+    if ( session_id() ) {
+        session_write_close();
+    }
+
+    $valid_key = defined('FSBHOA_LIGHTING_API_KEY') ? FSBHOA_LIGHTING_API_KEY : '733KjVR4jkBGnoBEDLbC1rvCqxF7gMdz6ygbxRjCM+Y=';
+    $provided_key = $request->get_header('X-API-Key');
+
+    if ( $provided_key !== $valid_key ) {
+        return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
+    }
+
+    $job_id = $request->get_param('job_id');
+    $status = sanitize_key($request->get_param('status'));
+
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'lighting_queue';
+    $updated = $wpdb->update($table_name, array('status' => $status), array('id' => $job_id));
+
+    return new WP_REST_Response(array("success" => $updated !== false), 200);
+}
 
 
