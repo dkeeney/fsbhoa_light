@@ -249,7 +249,7 @@ func isQRRequestAllowed(cfg Config, configData *FullConfigurationData, zoneID in
 	qrSpanDefined := false // Track if we find ANY QR-enabled spans
 	for _, span := range targetSched.Spans {
 		trig := strings.ToUpper(span.OnTrigger)
-		isQRType := (trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" || trig == "QR_TIME")
+		isQRType := (trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" || trig == "QR_SUNRISE" || trig == "QR_TIME")
 		if !isQRType {
 			continue
 		}
@@ -266,14 +266,24 @@ func isQRRequestAllowed(cfg Config, configData *FullConfigurationData, zoneID in
 
 		var sStart, sEnd uint16
 
-		if trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" {
+		if trig == "QR_PHOTOCELL" || trig == "QR_SUNDOWN" || trig == "QR_SUNRISE" {
 			sStart = PhotoStart
 			sEnd = PhotoEnd
 		} else if trig == "QR_TIME" {
-			if span.OnTime == nil || span.OffTime == nil { continue }
+			if span.OnTime == "" || span.OffTime == "" { continue }
 			
-			sVal, _ := strconv.Atoi(strings.ReplaceAll(*span.OnTime, ":", ""))
-			eVal, _ := strconv.Atoi(strings.ReplaceAll(*span.OffTime, ":", ""))
+                        // Clean the string first (remove colons)
+                        cleanOn := strings.ReplaceAll(span.OnTime, ":", "")
+                        cleanOff := strings.ReplaceAll(span.OffTime, ":", "")
+                        
+                        // Truncate to 4 digits if seconds are present
+                        if len(cleanOn) >= 4 { cleanOn = cleanOn[:4] }
+                        if len(cleanOff) >= 4 { cleanOff = cleanOff[:4] }
+
+                        sVal, _ := strconv.Atoi(cleanOn)
+                        eVal, _ := strconv.Atoi(cleanOff)
+                        log.Printf("DEBUG: Sched ID %d | Span OnTrigger %s | Times: %d to %d", 
+    targetSched.ID, span.OnTrigger, sVal, eVal)
 			
 			// Safely subtract the buffer using base-60 time math
 			hours := sVal / 100

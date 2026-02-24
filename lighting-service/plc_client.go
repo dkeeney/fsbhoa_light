@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/goburrow/modbus"
+        "github.com/nathan-osman/go-sunrise"
 )
 
 // --- Data Structures  ---
@@ -33,9 +34,9 @@ type FullConfigSchedule struct {
 type FullConfigSpan struct {
 	DaysOfWeek []string `json:"days_of_week"`
 	OnTrigger  string   `json:"on_trigger"`
-	OnTime     *string  `json:"on_time"`
+	OnTime     string   `json:"on_time"`
 	OffTrigger string   `json:"off_trigger"`
-	OffTime    *string  `json:"off_time"`
+	OffTime    string   `json:"off_time"`
 }
 type FullConfigurationData struct {
 	Zones     []FullConfigZone     `json:"zones"`
@@ -173,6 +174,8 @@ func generateScheduleBlock(schedule FullConfigSchedule) ([]uint16, uint16) {
 // PushConfigurationToPLCs orchestrates the full update process.
 func PushConfigurationToPLCs(cfg Config, data *FullConfigurationData) error {
 	log.Println("Starting Full PLC Configuration Update...")
+
+        applySolarTranslations(cfg, data)
 
 	// Step 1: Push Schedule Times (Start/End/Spans)
 	if err := ConfigureSchedules(cfg, data); err != nil {
@@ -669,30 +672,39 @@ func daysToBitmask(days []string) uint16 {
 	return mask
 }
 
-func triggerToPLCData(trigger string, t *string) (uint16, uint16) {
+func triggerToPLCData(trigger string, t string) (uint16, uint16) {
     var triggerCode, timeCode uint16
-    
+
     // 0 = time, 1 = photocell, 2 = QR & time, 3 = QR & photocell
     switch strings.ToUpper(trigger) {
-    case "TIME":
+    case "TIME", "SUNDOWN", "SUNRISE":
         triggerCode = 0
-    case "PHOTOCELL", "SUNDOWN", "SUNRISE":
+    case "PHOTOCELL":
         triggerCode = 1
-    case "QR_TIME":
+    case "QR_TIME", "QR_SUNDOWN", "QR_SUNRISE":
         triggerCode = 2
-    case "QR_PHOTOCELL", "QR_SUNDOWN":
+    case "QR_PHOTOCELL":
         triggerCode = 3
     default:
         triggerCode = 0
     }
 
-    if t != nil && len(*t) >= 5 {
-        timeStr := strings.Replace(*t, ":", "", -1)
-        if len(timeStr) >= 4 {
-            timeVal, _ := strconv.Atoi(timeStr[:4])
-            timeCode = uint16(timeVal)
+    if t != "" {
+        // 1. Remove colons: "07:15:00" -> "071500"
+        cleanTime := strings.ReplaceAll(t, ":", "")
+        
+        // 2. ONLY take the first 4 characters: "071500" -> "0715"
+        if len(cleanTime) >= 4 {
+            cleanTime = cleanTime[:4]
         }
+        
+        if val, err := strconv.Atoi(cleanTime); err == nil {
+            timeCode = uint16(val)
+        }
+    } else {
+        timeCode = 0 
     }
+
     return triggerCode, timeCode
 }
 
@@ -901,6 +913,43 @@ func ClearZoneQROff(cfg Config, configData *FullConfigurationData, zoneID int) e
 		}
 	}
 	return nil
+}
+
+
+
+func applySolarTranslations(cfg Config, data *FullConfigurationData) {
+    now := time.Now()
+    // Bakersfield coordinates from your config
+    riseUTC, setUTC := sunrise.SunriseSunset(cfg.Latitude, cfg.Longitude, now.Year(), now.Month(), now.Day())
+    
+    riseLocal := riseUTC.In(time.Local)
+    setLocal := setUTC.In(time.Local)
+
+    // HHMM format for the PLC
+    riseInt := riseLocal.Hour()*100 + riseLocal.Minute()
+    setInt := setLocal.Hour()*100 + setLocal.Minute()
+
+    log.Printf("Solar Calculation for Today: Sunrise=%04d, Sunset=%04d", riseInt, setInt)
+
+    for sIdx := range data.Schedules {
+        for pIdx := range data.Schedules[sIdx].Spans {
+            span := &data.Schedules[sIdx].Spans[pIdx]
+            
+            onTrig := strings.ToUpper(span.OnTrigger)
+            if onTrig == "SUNDOWN" || onTrig == "QR_SUNDOWN" {
+                span.OnTime = fmt.Sprintf("%04d", setInt)
+            } else if onTrig == "SUNRISE" || onTrig == "QR_SUNRISE" {
+                span.OnTime = fmt.Sprintf("%04d", riseInt)
+            }
+
+            offTrig := strings.ToUpper(span.OffTrigger)
+            if offTrig == "SUNDOWN" || offTrig == "QR_SUNDOWN" {
+                span.OffTime = fmt.Sprintf("%04d", setInt)
+            } else if offTrig == "SUNRISE" || offTrig == "QR_SUNRISE" {
+                span.OffTime = fmt.Sprintf("%04d", riseInt)
+            }
+        }
+    }
 }
 
 

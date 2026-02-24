@@ -132,11 +132,19 @@ function renderSchedulesTable(container, allSchedules) {
             let onLabel = '';
             if (span.on_trigger === 'TIME') onLabel = formatTime(span.on_time);
             else if (span.on_trigger === 'SUNDOWN') onLabel = 'Sundown';
+            else if (span.on_trigger === 'SUNRISE') onLabel = 'Sunrise';
+            else if (span.on_trigger === 'PHOTOCELL') onLabel = 'QR & Photocell';
             else if (span.on_trigger === 'QR_TIME') onLabel = `QR & ${formatTime(span.on_time)}`;
+            else if (span.on_trigger === 'QR_SUNRISE') onLabel = 'QR & Sunrise';
             else if (span.on_trigger === 'QR_SUNDOWN') onLabel = 'QR & Sundown';
+            else if (span.on_trigger === 'QR_PHOTOCELL') onLabel = 'QR & Photocell';
 
             // Off Trigger Labeling
-            const offLabel = span.off_trigger === 'TIME' ? formatTime(span.off_time) : 'Sunrise';
+            let offLabel = '';
+            if (span.off_trigger === 'TIME') offLabel = formatTime(span.off_time);
+            else if (span.off_trigger === 'SUNRISE') offLabel = 'Sunrise';
+            else if (span.off_trigger === 'SUNDOWN') offLabel = 'Sundown';
+            else if (span.off_trigger === 'PHOTOCELL') offLabel = 'Photocell';
 
             return `[${onLabel} - ${offLabel}] on ${days}`;
         }).join('<br>');
@@ -181,16 +189,21 @@ function renderSpanRow(span = {}) {
                 <span style="font-weight: bold;">On:</span>
                 <select name="on_trigger" style="flex-shrink: 0; width: 140px; ${controlStyle}">
                     <option value="TIME" ${span.on_trigger === 'TIME' ? 'selected' : ''}>Fixed Time</option>
-                    <option value="SUNDOWN" ${span.on_trigger === 'SUNDOWN' ? 'selected' : ''}>Sundown</option>
+                    <option value="PHOTOCELL" ${span.on_trigger === 'PHOTOCELL' ? 'selected' : ''}>Photocell (HW)</option>
+                    <option value="SUNDOWN" ${span.on_trigger === 'SUNDOWN' ? 'selected' : ''}>Sundown (calc)</option>
+                    <option value="SUNRISE" ${span.on_trigger === 'SUNRISE' ? 'selected' : ''}>Sunrise (calc)</option>
                     <option value="QR_TIME" ${span.on_trigger === 'QR_TIME' ? 'selected' : ''}>QR & Time</option>
+                    <option value="QR_PHOTOCELL" ${span.on_trigger === 'QR_PHOTOCELL' ? 'selected' : ''}>QR & Photocell</option>
                     <option value="QR_SUNDOWN" ${span.on_trigger === 'QR_SUNDOWN' ? 'selected' : ''}>QR & Sundown</option>
-                </select>
+                    <option value="QR_SUNRISE" ${span.on_trigger === 'QR_SUNRISE' ? 'selected' : ''}>QR & Sunrise</option>
+</select>
                 <input type="time" name="on_time" value="${span.on_time ? span.on_time.substring(0, 5) : ''}" style="${(span.on_trigger !== 'TIME' && span.on_trigger !== 'QR_TIME') ? 'display:none;' : ''} ${controlStyle}">
             </div>
             <div style="display: flex; align-items: center; gap: 4px;">
                  <span style="font-weight: bold;">Off:</span>
                 <select name="off_trigger" style="flex-shrink: 0; width: 110px; ${controlStyle}">
                     <option value="SUNRISE" ${span.off_trigger === 'SUNRISE' ? 'selected' : ''}>Sunrise</option>
+                    <option value="PHOTOCELL" ${span.off_trigger === 'PHOTOCELL' ? 'selected' : ''}>Photocell</option>
                     <option value="TIME" ${span.off_trigger === 'TIME' ? 'selected' : ''}>Fixed Time</option>
                 </select>
                 <input type="time" name="off_time" value="${span.off_time ? span.off_time.substring(0, 5) : ''}" style="${span.off_trigger !== 'TIME' ? 'display:none;' : ''} ${controlStyle}">
