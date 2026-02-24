@@ -21,6 +21,7 @@ type Config struct {
 	QRCodeActuatedDuration int            `json:"QRCodeActuatedDuration"`
         Latitude               float64        `json:"Latitude"`
         Longitude              float64        `json:"Longitude"`
+        IgnoreSolarCheck       bool           `json:"IgnoreSolarCheck"`
 }
 
 

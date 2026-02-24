@@ -24,7 +24,7 @@ register_activation_hook( __FILE__, function() {
         status varchar(20) DEFAULT 'pending',
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY  (id)
+        PRIMARY KEY  (id),
         KEY idx_status (status)
     ) $charset_collate;";
     require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
@@ -143,6 +143,12 @@ function fsbhoa_render_finished_ui($status) {
             <div style="font-size: 60px;">❌</div>
             <h2>QR Not Enabled</h2>
             <p>This zone is not currently configured for QR code activation. Please contact the IT Committee if you believe this is an error.</p>
+
+        <?php elseif ( $status === 'denied_no_swipe' ): ?>
+            <div style="font-size: 60px; margin-bottom: 20px;">🪪</div>
+            <h2 style="color: #d32f2f;">Entry Not Verified</h2>
+            <p>We couldn't find a recent gate entry for you. You must swipe your photo ID at any gate or the Lobby kiosk within the last 4 hrs.</p>
+
 
         <?php else: ?>
             <div style="font-size: 60px; color: red;">&#10007;</div>
@@ -278,7 +284,7 @@ function fsbhoa_handle_rest_wait_for_job( $request ) {
 
         try {
             if ($job) {
-                $wpdb->update($table_name, array('status' => 'processing'), array('id' => $job->id));
+                $updated =$wpdb->update($table_name, array('status' => 'processing'), array('id' => $job->id));
                 if ($updated === false) {
                     // DATABASE ERROR: Rollback immediately!
                     $wpdb->query("ROLLBACK");
@@ -322,14 +328,31 @@ function fsbhoa_handle_rest_update_job( $request ) {
         return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
     }
 
+    // Explicitly grab params from the request object
     $job_id = $request->get_param('job_id');
     $status = sanitize_key($request->get_param('status'));
 
+    if ( ! $job_id ) {
+        return new WP_Error( 'missing_id', 'Job ID is required', array( 'status' => 400 ) );
+    }
+
     global $wpdb;
     $table_name = $wpdb->prefix . 'lighting_queue';
-    $updated = $wpdb->update($table_name, array('status' => $status), array('id' => $job_id));
+    
+    // Perform the update
+    $updated = $wpdb->update(
+        $table_name, 
+        array('status' => $status), 
+        array('id' => $job_id),
+        array('%s'), // Format for status
+        array('%d')  // Format for id
+    );
 
-    return new WP_REST_Response(array("success" => $updated !== false), 200);
+    return new WP_REST_Response(array(
+        "success" => $updated !== false,
+        "job_id"  => $job_id,
+        "new_status" => $status
+    ), 200);
 }
 
 

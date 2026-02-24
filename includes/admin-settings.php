@@ -102,6 +102,15 @@ class Fsbhoa_Lighting_Admin_Settings {
             'fsbhoa_lighting_section_service',
             ['id' => 'longitude', 'type' => 'number', 'step' => '0.000001', 'default' => -119.0187, 'desc' => 'Geographic longitude for sunset calculations (e.g., -119.0187).']
         );
+        
+        add_settings_field(
+            'ignore_solar_check',
+            'Ignore Solar/Schedule Check',
+            array($this, 'render_checkbox_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_service',
+            ['id' => 'ignore_solar_check', 'desc' => 'If checked, QR scans will activate lights regardless of time of day or solar position. (Useful for testing)']
+        );
         add_settings_field('plc1_address', 'PLC #1 Address (Lodge)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc1_address', 'placeholder' => 'e.g., 192.168.1.201:502']);
         add_settings_field('plc2_address', 'PLC #2 Address (Pool)', array($this, 'render_field'), $this->page_slug, 'fsbhoa_lighting_section_plcs', ['id' => 'plc2_address', 'placeholder' => 'e.g., 192.168.1.202:502']);
         add_settings_field(
@@ -233,6 +242,23 @@ class Fsbhoa_Lighting_Admin_Settings {
             echo '<p class="description">' . esc_html($desc) . '</p>';
         }
     }
+
+    public function render_checkbox_field($args) {
+        $options = get_option($this->option_name, []);
+        $id      = $args['id'];
+        $desc    = $args['desc'] ?? '';
+        $checked = isset($options[$id]) && $options[$id] ? 'checked' : '';
+
+        printf(
+            '<input type="checkbox" name="%s[%s]" value="1" %s />',
+            esc_attr($this->option_name),
+            esc_attr($id),
+            $checked
+        );
+        if ($desc) {
+            echo '<p class="description">' . esc_html($desc) . '</p>';
+        }
+    }
     
     /**
      * --- Renders the media uploader button and preview ---
@@ -274,6 +300,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         $output['qr_code_actuated_duration'] = isset( $input['qr_code_actuated_duration'] ) ? absint( $input['qr_code_actuated_duration'] ) : 90;
         $output['latitude'] = isset( $input['latitude'] ) ? floatval( $input['latitude'] ) : 35.3733;
         $output['longitude'] = isset( $input['longitude'] ) ? floatval( $input['longitude'] ) : -119.0187;
+        $output['ignore_solar_check'] = isset( $input['ignore_solar_check'] ) ? (bool)$input['ignore_solar_check'] : false;
         $output['bluehost_url'] = isset( $input['bluehost_url'] ) ? esc_url_raw( $input['bluehost_url'] ) : $this->default_bluehost_url;
         $output['bluehost_api_key'] = isset( $input['bluehost_api_key'] ) ? sanitize_text_field( $input['bluehost_api_key'] ) : '';
         $output['log_file_path'] = isset( $input['log_file_path'] ) ? sanitize_text_field( $input['log_file_path'] ) : $this->default_log_path;
@@ -306,6 +333,7 @@ class Fsbhoa_Lighting_Admin_Settings {
             'QRCodeActuatedDuration' => isset($options['qr_code_actuated_duration']) ? (int)$options['qr_code_actuated_duration'] : 90,
             'Latitude' => isset($options['latitude']) ? (float)$options['latitude'] : 35.3733,
             'Longitude' => isset($options['longitude']) ? (float)$options['longitude'] : -119.0187,
+            'IgnoreSolarCheck' => isset($options['ignore_solar_check']) ? (bool)$options['ignore_solar_check'] : false,
             'BluehostURL'     => $options['bluehost_url'] ?? '',
             'BluehostAPIKey'  => $options['bluehost_api_key'] ?? '',
             'LogFilePath' => $options['log_file_path'] ?? $this->default_log_path,
