@@ -327,13 +327,13 @@ Rung 4:  [Always] -> (COPY DS[DS20] -> DS50)   // index of  schedule for this li
 Rung 5:  [CMP DS50 > 0] -> (OUT C1021)
 
 Rung 6:  [C1021] -> (MATH DS51 = (DS50 - 1)*70 + 101)  // Ptr to OnTrig on Schedule's first Span
-Rung 7:  [C1021] -> (MATH DS10 = DS50 + 1050)  // pointer to curr state of schedule for this light
+Rung 7:  [C1021] -> (MATH DS12 = DS50 + 1050)  // pointer to curr state of schedule for this light
 Rung 8:  [C1021] -> (MATH DS11 = DS50 + 1100)  // pointer to prev state of schedule for this light
 Rung 9:  [C1021] -> (MATH DS16 = DS5 + 200)   // pointer to RequestON bit for this light
 Rung 10: [C1021] -> (MATH DS17 = DS5 + 250)   // pointer to RequestOFF bit for this light
 Rung 11: [C1021] -> (MATH DS18 = DS5 + 940)   // Ptr to curr QREnd (DS941+)
 Rung 12: [C1021] -> (MATH DS22 = DS5 + 970)   // Ptr to prev QREnd (DS971+)
-Rung 13: [C1021] -> (COPY DS[DS10] -> DS56)   // value of curr state of schedule (DS1050-DS1061)
+Rung 13: [C1021] -> (COPY DS[DS12] -> DS56)   // value of curr state of schedule (DS1050-DS1061)
 Rung 14: [C1021] -> (COPY DS[DS11] -> DS57)   // value of prev state of schedule (DS1100-DS1111)
 Rung 15: [C1021] -> (COPY DS[DS18] -> DS19)   // value of curr QREnd (HHMM) (from DS941-DS964)
 Rung 16: [C1021] -> (COPY DS[DS22] -> DS23)   // value of prev QREnd (HHMM) (from DS971-DS094)
@@ -424,8 +424,9 @@ DS3    - Loop Counter for main loop (1 to 16 or 24)
 DS4    - Loop Counter for Schedule (1 to 12)
 DS5    - Loop Counter for Action Engine (1 to 16 or 24)
 DS6    - Max lights (16 or 24)
-DS10  - Ptr to Sched State
+DS10  - Ptr to Sched State (For SCHED_ENGINE)
 DS11  - Ptr to Prev State
+DS12  - Ptr to Sched State (For ACTION_ENGINE)
 DS15  - Ptr to Current State for an output(light)
 DS16  - Ptr to RequstON for an output (light)
 DS17  - Ptr to RequstOFF for an output (light)
