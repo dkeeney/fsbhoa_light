@@ -43,27 +43,29 @@
 Rung 1: [Always] -> (MATH DS30 = (SD24 * 100) + SD25)
 Rung 2: [Always] -> (RST C1020) // Always_OFF bit
 
-// === Master/Slave Logic (Photocell is remote) ===
-// If I am the master and we send X001 to C154.
-// If I am the Slave, read C154 from the Master PLC (IP 192.168.42.61)
-// Note that the RECV instruction calls this the "Server (Slave)"
-// but it is the IP address of the side that has the photo cell which
-// is down at the Cabana.
+ === Master/Slave Logic (Photocell is on slave) ===
+// If I am the Master, read C154 from the Slave PLC (at IP 192.168.42.61)
+// Note that the RECV instruction calls this the "Server (Slave)" but it is the IP address 
+// of the side that has the photo cell which is down at the Cabana.  
+// Lodge acts as Modbus Master to RECV Photocell state from Cabana (Slave) X001/C154.
+// (SC4 is a 1 second clock, so we poll once per second)
+
 //
 // When copying this Logic from Lodge to Cabana, change this Rung.
-// If Cabana (Master) set C153
-// If Lodge  (Slave)  reset C153
+// If Cabana (Slave) reset C153
+// If Lodge  (Master)  set C153
 
 Rung 3: [SC2] -> (Set C153)
 
-Rung 4: [C153] -> (COPY 16 -> DS6)  // number of lights on master
-Rung 5: [NOT C153] -> (COPY 24 -> DS6)  // number of lights on slave
+Rung 4: [NOT C153] -> (COPY 16 -> DS6)  // number of lights on slave (cabana)
+Rung 5: [C153] -> (COPY 24 -> DS6)  // number of lights on master (Lodge) 
 
-Rung 6: [C153] [X001] -> (OUT C154)
+Rung 6: [NOT C153] [X001] -> (SET C154)
+Rung 7: [NOT C153] [NOT X001] -> (RST C154)
 
 // Slave will poll for photocell state every 1 second (SC7).
-Rung 7: [NOT C153] [SC7] -> (RECV Via WLAN IP: 192.168.42.61
-                             ServerPortNo: 502, Slave ID 1
+Rung 8: [C153] [SC7] -> (RECV Via WLAN IP: 192.168.42.61
+                             ServerPortNo: 502, Slave ID 2
                              Modbus Function code: 01
                              Slave Addr: C154, 1 bit.
                              Master: C154 Photocell_State)
@@ -79,7 +81,7 @@ Rung 7: [NOT C153] [SC7] -> (RECV Via WLAN IP: 192.168.42.61
 // All manual overrides are cancelled.  This cleans up when schedules change or are
 // remapped.  It also handles the initial startup where no previous schedule state exist.
 
-Rung 8: [SC2] -> (COPY DS6 -> DS3) // Init Sequencer
+Rung 9: [SC2] -> (COPY DS6 -> DS3) // Init Sequencer
         (parallel) -> (SET C151) // Request a sync on first boot
 
 // ---------------------------------
@@ -93,7 +95,7 @@ Rung 8: [SC2] -> (COPY DS6 -> DS3) // Init Sequencer
 // If we are not busy with a pulse [NOT C1005], advance to next output pair.
 // In order to ensure that timer T2 has a chance to clear, we check [NOT T2].
 
-Rung 9: [NOT C1022] [NOT C1005] [NOT T2] -> (MATH DS3 = DS3 + 1) // Increment Sequencer
+Rung 10: [NOT C1022] [NOT C1005] [NOT T2] -> (MATH DS3 = DS3 + 1) // Increment Sequencer
 
 // Latch, Sched, & Wrap Logic
 // (This block runs *only* when the sequencer wraps past 24)
@@ -102,15 +104,15 @@ Rung 9: [NOT C1022] [NOT C1005] [NOT T2] -> (MATH DS3 = DS3 + 1) // Increment Se
 // Then call SCHED_ENGINE to check all of the schedules.  All of this in preperation
 // for the next loop through the output pairs.
 
-Rung 10: [CMP DS3 > DS6] -> (COPY 1 -> DS3)   // Wrap, set Sequencer to 1
+Rung 11: [CMP DS3 > DS6] -> (COPY 1 -> DS3)   // Wrap, set Sequencer to 1
          (parallel) -> (SET C1004)
 
 // latch the sync flag so it cannot change while processing the actions
-Rung 11: [C1004] [C151]   -> (SET C152)
+Rung 12: [C1004] [C151]   -> (SET C152)
          (parallel) -> (RST C151)
          (parallel) -> (CALL CLEAR_MEM)   // need to clear sched status on all 12
 
-Rung 12: [C1004]   -> (RST C1004)
+Rung 13: [C1004]   -> (RST C1004)
         (parallel) -> (CALL SCHED_ENGINE)   // Process schedules
         (parallel) -> (CALL ACTION_ENGINE)  // Requests ON or OFF
 
@@ -123,11 +125,11 @@ Rung 12: [C1004]   -> (RST C1004)
 // ---------------------------------
 // pointer to the sched ID, Current State, Previous State, and On/Off requests for
 // this pair of outputs.
-Rung 13: [Always] -> (MATH DS15 = DS3 + 100)
-Rung 14: [Always] -> (MATH DS16 = DS3 + 200)
-Rung 15: [Always] -> (MATH DS17 = DS3 + 250)
-Rung 16: [Always] -> (COPY C[DS16] -> C1009)   // Get ReqON for this light
-Rung 17: [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF for this light
+Rung 14: [Always] -> (MATH DS15 = DS3 + 100)
+Rung 15: [Always] -> (MATH DS16 = DS3 + 200)
+Rung 16: [Always] -> (MATH DS17 = DS3 + 250)
+Rung 17: [Always] -> (COPY C[DS16] -> C1009)   // Get ReqON for this light
+Rung 18: [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF for this light
 
 // == Physical Output Logic ==
 // Calculate which 16-bit YD word to use (100, 200, or 300) each corresponds
@@ -136,20 +138,20 @@ Rung 17: [Always] -> (COPY C[DS17] -> C1010)   // Get ReqOFF for this light
 // drive no more than 4 relays at a time and in some cases the relay driver will
 // drive 3 relays from one output.
 
-Rung 18: [Always] -> (MATH DS80 = (DS3-1)/8+1)
-Rung 19: [Always] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
-Rung 20: [Always] -> (COPY DS82 -> DH82)
-Rung 21: [Always] -> (COPY 1h -> DH81)
-Rung 22: [Always] -> (MATH DH83 = LSH(DH81, DH82))  // ON bit mask
-Rung 23: [Always] -> (MATH DH84 = LSH(DH83, 1h))    // OFF bit mask
-Rung 24: [Always] -> (COPY DH83 -> DS83)
-Rung 25: [Always] -> (COPY DH84 -> DS84)
+Rung 19: [Always] -> (MATH DS80 = (DS3-1)/8+1)
+Rung 20: [Always] -> (MATH DS82 = ((DS3-1) MOD 8) *2)
+Rung 21: [Always] -> (COPY DS82 -> DH82)
+Rung 22: [Always] -> (COPY 1h -> DH81)
+Rung 23: [Always] -> (MATH DH83 = LSH(DH81, DH82))  // ON bit mask
+Rung 24: [Always] -> (MATH DH84 = LSH(DH83, 1h))    // OFF bit mask
+Rung 25: [Always] -> (COPY DH83 -> DS83)
+Rung 26: [Always] -> (COPY DH84 -> DS84)
 // NOTE: technically, we could use DH83 and DH84 below rather than DS83 and DS84.
 
 //  "ON" Action
 // Turn on the output and clear the request bits, Declare busy.
 // We now do nothing but loop until the timer is complete.
-Rung 26: [NOT C1005] [C1009] -> (SET C1005)             // Set Busy
+Rung 27: [NOT C1005] [C1009] -> (SET C1005)             // Set Busy
          (parallel) -> (COPY SC1 -> C[DS15])     // Set light's State to ON
          (parallel) -> (COPY C1020 -> C[DS16])   // Clear ReqON
          (parallel) -> (COPY C1020 -> C[DS17])   // Clear ReqOFF
@@ -158,24 +160,24 @@ Rung 26: [NOT C1005] [C1009] -> (SET C1005)             // Set Busy
 //  "OFF" Action
 // Turn off the output and clear the request bits.  Declare busy.
 // We now do nothing but loop[ until the timer is complete.
-Rung 27: [NOT C1005] [NOT C1009] [C1010] -> (SET C1005)           // Set Busy
+Rung 28: [NOT C1005] [NOT C1009] [C1010] -> (SET C1005)           // Set Busy
          (parallel) -> (COPY C1020 -> C[DS15])  // Set Light's State OFF
          (parallel) -> (COPY C1020 -> C[DS16])  // Clear ReqON
          (parallel) -> (COPY C1020 -> C[DS17])  // Clear ReqOFF
          (parallel) -> (COPY DS84 -> YD[DS80]) // Pulse OFF
 
 //  100ms Pulse Timer
-Rung 28: [C1005] -> (TMR T1 250) // 250ms
+Rung 29: [C1005] -> (TMR T1 250) // 250ms
 
 //  Stop Pulse, Start Post-Pulse Delay
-Rung 29: [T1] [NOT C1008] -> (COPY 0 -> YD[DS80]) // Stop Pulse
+Rung 30: [T1] [NOT C1008] -> (COPY 0 -> YD[DS80]) // Stop Pulse
          (parallel) -> (SET C1008)
 
 //  100ms Post-Pulse Delay Timer
-Rung 30: [C1008] -> (TMR T2 100)  // 100ms
+Rung 31: [C1008] -> (TMR T2 100)  // 100ms
 
 //  Clean up Timers and Busy Flag
-Rung 31: [T2] -> (RST C1005)
+Rung 32: [T2] -> (RST C1005)
          (parallel) -> (RST C1008)
 
          // note that after clearing C1008, Timer T2 will not clear
@@ -184,7 +186,7 @@ Rung 31: [T2] -> (RST C1005)
 // ---------------------------------
 // End of Program
 // ---------------------------------
-Rung 32: [Always] -> (END)
+Rung 33: [Always] -> (END)
 
 
 //=================================================================================
