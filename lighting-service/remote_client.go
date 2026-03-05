@@ -46,9 +46,23 @@ func (app *App) StartBluehostPoller() {
 			// Fix the typo: ZoneID is an int, use %d
 			log.Printf("Job #%d Received: Turn on Zone %d for %s", job.JobID, job.ZoneID, job.Email)
 
+			// A. Pre-fetch Zone and Schedule (Single Source of Truth)
+			var targetZone *FullConfigZone
+			for _, z := range app.PLCConfig.Zones {
+				if z.ID == job.ZoneID {
+					targetZone = &z
+					break
+				}
+			}
+
+			if targetZone == nil {
+				log.Printf("Job #%d REJECTED: Zone %d not found in config", job.JobID, job.ZoneID)
+				app.reportStatus(job.JobID, "zone_not_found")
+				continue
+			}
+
 			// 1. Verify Swipe (Correctly parsing the isValid boolean)
-			isValid := verifyLocalSwipe(app.Config, job.Email)
-			//isValid, rfid := verifyLocalSwipe(app.Config, job.Email)
+			isValid, rfid := verifyLocalSwipe(app.Config, job.Email)
 			if isValid {
 
 				duration := app.Config.QRCodeActuatedDuration
@@ -56,7 +70,10 @@ func (app *App) StartBluehostPoller() {
 					duration = 90
 				}
 
-				allowed, reason := isQRRequestAllowed(app.Config, app.PLCConfig, job.ZoneID, duration)
+				allowed, reason := isQRRequestAllowed(app.Config,
+					app.PLCConfig,
+					targetZone.ScheduleID,
+					duration)
 				if !allowed {
 					log.Printf("Job #%d REJECTED: %s", job.JobID, reason)
 					app.reportStatus(job.JobID, reason) // e.g., "outside_qr_window"
@@ -73,7 +90,7 @@ func (app *App) StartBluehostPoller() {
 					} else {
 						log.Printf("Job #%d Success: Zone %d activated until %d.", job.JobID, job.ZoneID, qroffValue)
 						app.reportStatus(job.JobID, "success")
-						//go app.LogQRSuccessToWordPress(job, qroffValue, rfid)
+						go app.LogQRSuccessToWordPress(*job, targetZone.ZoneName, rfid)
 					}
 				}
 			} else {
@@ -118,7 +135,7 @@ func performLongPoll(client *http.Client, cfg Config) (*PollResponse, error) {
 }
 
 // Helper: Asks Local WordPress if this email swiped the gate recently
-func verifyLocalSwipe(cfg Config, email string) bool {
+func verifyLocalSwipe(cfg Config, email string) (bool, string) {
 	url := fmt.Sprintf("%s/wp-json/fsbhoa/v1/access/verify-email?email=%s", cfg.AccessControlURL, url.QueryEscape(email))
 
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -128,27 +145,28 @@ func verifyLocalSwipe(cfg Config, email string) bool {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("Swipe Verification Connection Error: %v", err)
-		return false
+		return false, ""
 	}
 	defer resp.Body.Close()
 
 	// 1. Check if the server actually responded
 	if resp.StatusCode != 200 {
-		return false
+		return false, ""
 	}
 
 	// 2. Parse the JSON body to see if it's ACTUALLY valid
 	var data struct {
 		IsValid bool   `json:"isValid"`
+		RFID    string `json:"rfid_id"`
 		Message string `json:"message"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		log.Printf("Error decoding swipe response: %v", err)
-		return false
+		return false, ""
 	}
 
-	return data.IsValid
+	return data.IsValid, data.RFID
 }
 
 func (app *App) reportStatus(jobID int, status string) {
@@ -186,28 +204,16 @@ func (app *App) reportStatus(jobID int, status string) {
 }
 
 // Check if at least part of the QR request duration will fall within a QR Enabled window.
-func isQRRequestAllowed(cfg Config, configData *FullConfigurationData, zoneID int, durationMinutes int) (bool, string) {
+func isQRRequestAllowed(cfg Config, configData *FullConfigurationData, scheduleID int, durationMinutes int) (bool, string) {
 	// --- MASTER OVERRIDE ---
 	if cfg.IgnoreSolarCheck {
 		log.Printf("Bypassing solar and schedule checks (IgnoreSolarCheck is ON)")
 		return true, ""
 	}
 
-	// 1. Find the Zone and Schedule
-	var targetZone *FullConfigZone
-	for _, z := range configData.Zones {
-		if z.ID == zoneID {
-			targetZone = &z
-			break
-		}
-	}
-	if targetZone == nil {
-		return false, "zone_not_found"
-	}
-
 	var targetSched *FullConfigSchedule
 	for _, s := range configData.Schedules {
-		if s.ID == targetZone.ScheduleID {
+		if s.ID == scheduleID {
 			targetSched = &s
 			break
 		}
@@ -333,38 +339,33 @@ func isQRRequestAllowed(cfg Config, configData *FullConfigurationData, zoneID in
 	return false, "outside_qr_window"
 }
 
-func (app *App) LogQRSuccessToWordPress(job PollResponse, qroffValue uint16, rfid string) {
-	// 1. Prepare the payload to mimic a hardware event
-	// SerialNumber "QR_ACTIVATE" distinguishes this from physical controllers
+func (app *App) LogQRSuccessToWordPress(job PollResponse, zoneName string, rfid string) {
+	// We use the 900001 Virtual Serial Number
 	payload := map[string]interface{}{
 		"Timestamp":    time.Now().Format("2006-01-02 15:04:05"),
-		"SerialNumber": "QR_ACTIVATE",
-		"Door":         job.ZoneID, // We use ZoneID as the "Door" number
-		"CardNumber":   rfid,
-		"Reason":       1, // 1 = Swipe (Standard Access)
+		"SerialNumber": "900001",
+		"Door":         job.ZoneID,
+		"ZoneName":     zoneName, // Matches the 'friendly_name' in ac_doors
+		"CardNumber":   rfid,     // The resident's actual card number
+		"Reason":       1,        // Standard swipe
 		"Granted":      true,
-		"EventMessage": fmt.Sprintf("QR Scan: Zone %d activated by %s until %04d", job.ZoneID, job.Email, qroffValue),
+		"EventMessage": fmt.Sprintf("QR Scan: %s activated", zoneName),
 	}
 
 	jsonData, _ := json.Marshal(payload)
+	apiURL := fmt.Sprintf("%s/wp-json/fsbhoa/v1/monitor/log-event", app.Config.AccessControlURL)
 
-	// 2. POST to your existing /monitor/log-event endpoint
-	apiURL := fmt.Sprintf("%s/wp-json/fsbhoa/v1/monitor/log-event", app.Config.LightingAPIBaseURL)
-
-	req, err := http.NewRequest("POST", apiURL, strings.NewReader(string(jsonData)))
-	if err != nil {
-		log.Printf("QR Logging Error: %v", err)
-		return
-	}
-
+	req, _ := http.NewRequest("POST", apiURL, strings.NewReader(string(jsonData)))
 	req.Header.Set("Content-Type", "application/json")
-	// If you add an API key check to the monitor route later, add it here
+	req.Header.Set("X-API-KEY", app.Config.AccessControlAPIKey) // Use your existing key logic
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("QR Logging Error (Connect): %v", err)
-		return
-	}
-	defer resp.Body.Close()
+	go func() {
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("Audit Log Error: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+	}()
 }
