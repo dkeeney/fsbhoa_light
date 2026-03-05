@@ -21,15 +21,20 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 	rawResults := app.GetRawPLCData()
 
 	type DebugResponse struct {
-		PLCID       int                       `json:"plc_id"`
-		Host        string                    `json:"host"`
-                TotalSpans  uint16                    `json:"total_spans_ds99"`
-		LightStatus []bool                    `json:"light_status_c101"`
-		LightMap    []uint16                  `json:"light_map_ds1000"`
-		SchedIDMap  []uint16                  `json:"sched_id_map_ds1031"`
-		SchedState  []uint16                  `json:"sched_state_ds1051"`
-		QRTimers    []uint16                  `json:"qr_timers_ds941"`    // <--- Added this line
-		Schedules   map[string][]ScheduleSpan `json:"schedules_decoded"`
+		PLCID           int                       `json:"plc_id"`
+		Host            string                    `json:"host"`
+		TotalSpans      uint16                    `json:"total_spans_ds99"`
+		LightStatus     []bool                    `json:"light_status_c101"`
+		LightMap        []uint16                  `json:"light_map_ds1000"`
+		SchedIDMap      []uint16                  `json:"sched_id_map_ds1031"`
+		SchedState      []uint16                  `json:"sched_state_ds1051"`
+		QRTimers        []uint16                  `json:"qr_timers_ds941"` // <--- Added this line
+		Schedules       map[string][]ScheduleSpan `json:"schedules_decoded"`
+		LastSpanIdx     uint16                    `json:"last_span_idx_ds2"`      // Counter DS2
+		LastSchedIdx    uint16                    `json:"last_sched_idx_ds4"`     // Counter DS4
+		LastPointer     uint16                    `json:"last_pointer_ds21"`      // Base Pointer DS21
+		LastDestPointer uint16                    `json:"last_dest_pointer_ds10"` // Where Rung 37 writes
+		LastCalcState   uint16                    `json:"last_calc_state_ds56"`   // The result for Slot 6
 	}
 
 	var response []DebugResponse
@@ -46,15 +51,20 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 		}
 
 		response = append(response, DebugResponse{
-			PLCID:       p.PLCID,
-			Host:        p.Host,
-                        TotalSpans:  p.TotalSpanCount,
-			LightStatus: p.LightStatus,
-			LightMap:    p.LightMap,
-			SchedIDMap:  p.SchedIDMap,
-			SchedState:  p.SchedState,
-			QRTimers:    p.QRTimers,          // <--- Added this line
-			Schedules:   decodedScheds,
+			PLCID:           p.PLCID,
+			Host:            p.Host,
+			TotalSpans:      p.TotalSpanCount,
+			LightStatus:     p.LightStatus,
+			LightMap:        p.LightMap,
+			SchedIDMap:      p.SchedIDMap,
+			SchedState:      p.SchedState,
+			QRTimers:        p.QRTimers,
+			LastSpanIdx:     p.LastSpanIdx,
+			LastSchedIdx:    p.LastSchedIdx,
+			LastPointer:     p.LastPointer,
+			LastDestPointer: p.LastDestPointer,
+			LastCalcState:   p.LastCalcState,
+			Schedules:       decodedScheds,
 		})
 	}
 
@@ -76,22 +86,27 @@ func (app *App) handleDebugRegisters(w http.ResponseWriter, r *http.Request, _ h
 // ---------------------------------------------------------------------
 
 type RawPLCData struct {
-	PLCID         int
-	Host          string
-        TotalSpanCount uint16
-	LightStatus   []bool
-	ScheduleSpans map[string][]uint16
-	QRTimers      []uint16
-	LightMap      []uint16
-	SchedIDMap    []uint16
-	SchedState    []uint16
+	PLCID           int
+	Host            string
+	TotalSpanCount  uint16
+	LightStatus     []bool
+	ScheduleSpans   map[string][]uint16
+	QRTimers        []uint16
+	LightMap        []uint16
+	SchedIDMap      []uint16
+	SchedState      []uint16
+	LastSpanIdx     uint16
+	LastSchedIdx    uint16
+	LastPointer     uint16
+	LastDestPointer uint16
+	LastCalcState   uint16
 }
 
 func (app *App) GetRawPLCData() []RawPLCData {
 	var results []RawPLCData
 
 	for key, host := range app.Config.PLCs {
-		
+
 		plcID, _ := strconv.Atoi(fmt.Sprintf("%v", key))
 
 		client, err := modbus.NewClient(&modbus.ClientConfiguration{
@@ -121,7 +136,7 @@ func (app *App) GetRawPLCData() []RawPLCData {
 		}
 
 		// --- Read Holding Registers ---
-                // 1. Total Spans (DS99 / Addr 98) <--- Added
+		// 1. Total Spans (DS99 / Addr 98) <--- Added
 		// We read 1 register at address 98
 		if regs, err := client.ReadRegisters(98, 1, modbus.HOLDING_REGISTER); err == nil && len(regs) > 0 {
 			data.TotalSpanCount = regs[0]
@@ -131,7 +146,7 @@ func (app *App) GetRawPLCData() []RawPLCData {
 		regsPerSched := uint16(NumSpans * 5)
 		for j := 0; j < NumSchedules; j++ {
 			offset := uint16(j) * regsPerSched
-			startReg := uint16(AddrSchedConfigBase) + offset 
+			startReg := uint16(AddrSchedConfigBase) + offset
 
 			spans, err := client.ReadRegisters(startReg, regsPerSched, modbus.HOLDING_REGISTER)
 			if err == nil {
@@ -158,7 +173,26 @@ func (app *App) GetRawPLCData() []RawPLCData {
 		if regs, err := client.ReadRegisters(uint16(AddrQROffTimeBase), 25, modbus.HOLDING_REGISTER); err == nil {
 			data.QRTimers = regs
 		}
+		// Read DS2 and DS4 (Address 1 and 3)
+		if regs, err := client.ReadRegisters(1, 4, modbus.HOLDING_REGISTER); err == nil && len(regs) >= 4 {
+			data.LastSpanIdx = regs[0]  // DS2
+			data.LastSchedIdx = regs[2] // DS4
+		}
 
+		// Read DS21 (Address 20)
+		if regs, err := client.ReadRegisters(20, 1, modbus.HOLDING_REGISTER); err == nil && len(regs) > 0 {
+			data.LastPointer = regs[0] // DS21
+		}
+
+		// --- Read DS10 (Address 9) ---
+		if regs, err := client.ReadRegisters(9, 1, modbus.HOLDING_REGISTER); err == nil && len(regs) > 0 {
+			data.LastDestPointer = regs[0]
+		}
+
+		// --- Read DS56 (Address 55) ---
+		if regs, err := client.ReadRegisters(55, 1, modbus.HOLDING_REGISTER); err == nil && len(regs) > 0 {
+			data.LastCalcState = regs[0]
+		}
 		client.Close()
 		results = append(results, data)
 	}
@@ -208,4 +242,3 @@ func decodeDays(mask uint16) string {
 	}
 	return strings.Join(activeDays, ",")
 }
-

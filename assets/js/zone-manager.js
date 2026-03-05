@@ -107,6 +107,9 @@ const loadAllConfigData = async () => {
 // --- BACKGROUND POLLING: Update Bulbs on Configuration relay mapping screen Only (Safe for Editing) ---
 // --- HELPER: Single Status Update (Shared Logic) ---
 const updateBulbsOnly = async () => {
+    //  Visibility Guard
+    if (document.visibilityState === 'hidden') return;
+
     try {
         const res = await statusApi.get();
         if (!res.ok) return;

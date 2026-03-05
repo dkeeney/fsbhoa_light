@@ -62,9 +62,8 @@ document.addEventListener('DOMContentLoaded', function () {
         return `${displayHours}:${displayMinutes} ${period}`;
     };
 
-    // Here is a sample of what the Go Service returns from the status poll:
+    // Here is the Go Service command to return the status poll:
     //  $ curl http://localhost:8085/status
-    // {"PLC1-Y101":false,"PLC1-Y103":false,"PLC1-Y105":false,"PLC1-Y107":false,"PLC1-Y109":false,"PLC1-Y111":false,"PLC1-Y113":false,"PLC1-Y115":false,"PLC1-Y201":false,"PLC1-Y203":false,"PLC1-Y205":false,"PLC1-Y207":false,"PLC1-Y209":false,"PLC1-Y211":false,"PLC1-Y213":false,"PLC1-Y215":false,"PLC1-Y301":false,"PLC1-Y303":false,"PLC1-Y305":false,"PLC1-Y307":false,"PLC1-Y309":false,"PLC1-Y311":false,"PLC1-Y313":false,"PLC1-Y315":false,"PLC2-Y101":false,"PLC2-Y103":false,"PLC2-Y105":false,"PLC2-Y107":false,"PLC2-Y109":false,"PLC2-Y111":false,"PLC2-Y113":false,"PLC2-Y115":false,"PLC2-Y201":false,"PLC2-Y203":false,"PLC2-Y205":false,"PLC2-Y207":false,"PLC2-Y209":false,"PLC2-Y211":false,"PLC2-Y213":false,"PLC2-Y215":false,"Photocell":false,"Sched10":1,"Sched11":1,"Sched12":1,"Sched4":1,"Sched5":0,"Sched6":1,"Sched7":1,"Sched8":0,"Sched9":1,"schedule_map_1":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"schedule_map_2":[0,5,0,0,0,5,0,5,0,11,0,5,0,11,0,0,0,11,0,5,0,5,0,4]}
 
     const renderStatus = (status) => {
         if (zoneData.length === 0 || mappingData.length === 0) {
@@ -217,9 +216,20 @@ document.addEventListener('DOMContentLoaded', function () {
         }).join('');
 
         // --- Photocell and Header Logic ---
-        const photocellStatus = status['Photocell'] === true
-            ? '<span style="color: #333; font-weight: bold;">NIGHT</span> (Sundown Active)'
-            : '<span style="color: orange; font-weight: bold;">DAY</span> (Waiting for Sundown)';
+        const sunrise = status.SunriseTime || '--:--';
+        const sunset = status.SunsetTime || '--:--';
+        const photocellState = status.Photocell === true
+            ? '<span style="color: #333; font-weight: bold;">🌙 NIGHT</span>'
+            : '<span style="color: #2271b1; font-weight: bold;">☀️ DAY</span>';
+
+        const photocellStatus = `
+            <div style="display: flex; gap: 15px; align-items: center;">
+                <span>Photocell: ${photocellState}</span>
+                <span style="color: #999; font-style: normal;">|</span>
+                Computed: <span title="Sunrise" style="font-style: normal;">🌅 ${sunrise}</span>
+                <span title="Sunset" style="font-style: normal;">🌇 ${sunset}</span>
+            </div>
+        `;
 
         const isBursting = typeof burstEndTime !== 'undefined' && Date.now() < burstEndTime;
         const refreshRate = isBursting ? "Turbo (0.2s)" : "2s";
@@ -277,6 +287,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // --- The Dynamic Polling Loop ---
     const runUpdateLoop = async (forceConfig = false) => {
+        if (document.visibilityState === 'hidden') {
+            isUpdating = false;
+            // Check again in 2 seconds, but don't perform the fetch
+            loopTimerId = setTimeout(runUpdateLoop, POLL_INTERVAL_NORMAL);
+            return;
+        }
         if (isUpdating) return;
         isUpdating = true;
         
