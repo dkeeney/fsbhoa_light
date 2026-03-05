@@ -55,3 +55,5 @@ lighting-service/lighting-service
 *.tar.gz
 *.rar
 *.gz
+
+softPLC/retentive_memory_*.json
