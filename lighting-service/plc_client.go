@@ -735,7 +735,11 @@ func bytesToU16Slice(b []byte) []uint16 {
 	return u16s
 }
 
-func SetPLCTime(plcID int, host string) error {
+// The PLC's have a real-time clock that is syncronized using SNTP.
+// But this does not set DST.  So we need to push the DST at 3am when
+// the DST time switches.  Just to be sure.  We do this every day at 3am and
+// whenever the Go Service is restarted.
+func SetPLCDST(plcID int, host string) error {
 	handler := modbus.NewTCPClientHandler(host)
 	handler.Timeout = 5 * time.Second
 	handler.SlaveId = byte(plcID)
@@ -745,49 +749,29 @@ func SetPLCTime(plcID int, host string) error {
 		return fmt.Errorf("SetPLCTime connect error: %w", err)
 	}
 	defer handler.Close()
-
 	now := time.Now()
 
-	// Mapping for CLICK PLC (Contiguous Registers):
-	// SD29 (Addr 28): New Year
-	// SD30 (Addr 29): New Month
-	// SD31 (Addr 30): New Day
-	// SD32 (Addr 31): New Day of Week (Required!)
-	// SD33 (Addr 32): New Hour
-	// SD34 (Addr 33): New Minute
-	// SD35 (Addr 34): New Second
+	// Determine if we are currently in DST based on the server's clock
+	// In Go, .IsDST() returns true if the time is in Daylight Savings
+	isDST := now.IsDST()
 
-	data := []uint16{
-		uint16(now.Year()),        // SD29
-		uint16(now.Month()),       // SD30
-		uint16(now.Day()),         // SD31
-		uint16(now.Weekday() + 1), // SD32 (Day of Week: 1=Sun, 2=Mon...)
-		uint16(now.Hour()),        // SD33
-		uint16(now.Minute()),      // SD34
-		uint16(now.Second()),      // SD35
+	// Modbus Address for SC121 is 61560 (0-based)
+	// (61440 + 121 - 1 = 61560)
+	addr := uint16(61560)
+
+	if isDST {
+		log.Println("Server is in DST. Setting PLC SC121 to ON...")
+		_, err = client.WriteSingleCoil(addr, 0xFF00)
+		if err != nil {
+			return fmt.Errorf("failed to set SC53 (Date Update): %w", err)
+		}
+	} else {
+		log.Println("Server is in Standard Time. Setting PLC SC121 to OFF...")
+		_, err = client.WriteSingleCoil(addr, 0x0000)
+		if err != nil {
+			return fmt.Errorf("failed to set SC53 (Date Update): %w", err)
+		}
 	}
-
-	byteData := u16SliceToBytes(data)
-
-	// Write to SD29 (Address 28)
-	_, err = client.WriteMultipleRegisters(28, uint16(len(data)), byteData)
-	if err != nil {
-		return fmt.Errorf("failed to write new time registers: %w", err)
-	}
-
-	// Trigger Date Update (SC53 at 61492)
-	_, err = client.WriteSingleCoil(61492, 0xFF00)
-	if err != nil {
-		return fmt.Errorf("failed to set SC53 (Date Update): %w", err)
-	}
-
-	// Trigger Time Update (SC55 at 61494)
-	_, err = client.WriteSingleCoil(61494, 0xFF00)
-	if err != nil {
-		return fmt.Errorf("failed to set SC55 (Time Update): %w", err)
-	}
-
-	log.Printf("Successfully set time on %s to: %v", host, now.Format(time.RFC3339))
 	return nil
 }
 
