@@ -66,8 +66,15 @@ func (app *App) StartBluehostPoller() {
 				continue
 			}
 
-			// 1. Verify Swipe (Correctly parsing the isValid boolean)
-			isValid, rfid := verifyLocalSwipe(app.Config, job.Email)
+			// 1. Verify Swipe or public access
+			var isValid bool
+			var rfid string
+			if app.Config.PublicQREnabled {
+				isValid = true
+				rfid = "PUBLIC_ACCESS"
+			} else {
+				isValid, rfid = verifyLocalSwipe(app.Config, job.Email)
+			}
 			if isValid {
 
 				duration := app.Config.QRCodeActuatedDuration
@@ -125,6 +132,12 @@ func performLongPoll(client *http.Client, cfg Config) (*PollResponse, error) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FSBHOA-Lighting/1.1")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-Key", cfg.BluehostAPIKey)
+	// PIGGYBACK: Send the public access setting to Bluehost
+	publicVal := "0"
+	if cfg.PublicQREnabled {
+		publicVal = "1"
+	}
+	req.Header.Set("X-Public-QR-Enabled", publicVal)
 
 	resp, err := client.Do(req)
 	if err != nil {

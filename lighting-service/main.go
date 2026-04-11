@@ -16,14 +16,14 @@ type Config struct {
 	LightingAPIBaseURL     string         `json:"LightingAPIBaseURL"`
 	BluehostURL            string         `json:"BluehostURL"`
 	BluehostAPIKey         string         `json:"BluehostAPIKey"`
-        AccessControlAPIKey    string         `json:"AccessControlAPIKey"`
-        AccessControlURL       string         `json:"AccessControlURL"`
+	AccessControlAPIKey    string         `json:"AccessControlAPIKey"`
+	AccessControlURL       string         `json:"AccessControlURL"`
 	QRCodeActuatedDuration int            `json:"QRCodeActuatedDuration"`
-        Latitude               float64        `json:"Latitude"`
-        Longitude              float64        `json:"Longitude"`
-        IgnoreSolarCheck       bool           `json:"IgnoreSolarCheck"`
+	Latitude               float64        `json:"Latitude"`
+	Longitude              float64        `json:"Longitude"`
+	IgnoreSolarCheck       bool           `json:"IgnoreSolarCheck"`
+	PublicQREnabled        bool           `json:"PublicQREnabled"`
 }
-
 
 // Global config variable
 var globalConfig Config
@@ -68,20 +68,20 @@ func main() {
 
 	// 3. Initialize App
 	app := &App{
-		Config:         cfg,
+		Config: cfg,
 	}
 
-        // Fetch initial config so the system isn't "blank" on boot
-        log.Println("Fetching initial configuration...")
-        initialCfg, err := FetchConfigurationFromAPI(app.Config)
-        if err == nil {
-            app.PLCConfig = initialCfg
-        } else {
-            log.Printf("Warning: Initial config fetch failed: %v", err)
-        }
+	// Fetch initial config so the system isn't "blank" on boot
+	log.Println("Fetching initial configuration...")
+	initialCfg, err := FetchConfigurationFromAPI(app.Config)
+	if err == nil {
+		app.PLCConfig = initialCfg
+	} else {
+		log.Printf("Warning: Initial config fetch failed: %v", err)
+	}
 
 	// 4. Start Background Services
-	
+
 	// A. Remote Client (Bluehost) - Delegated to remote_client.go
 	if cfg.BluehostURL != "" && cfg.BluehostAPIKey != "" {
 		go app.StartBluehostPoller()
@@ -92,12 +92,9 @@ func main() {
 	// B. Time Syncer (PLC Clocks) - Delegated to http_server.go
 	go app.startTimeSyncer()
 
-
 	// 5. Start HTTP Server - Delegated to http_server.go
 	log.Printf("Starting HTTP server on %s...", cfg.ListenPort)
 	if err := app.RunServer(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
-
-

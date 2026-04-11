@@ -133,6 +133,15 @@ class Fsbhoa_Lighting_Admin_Settings {
         );
 
         add_settings_field(
+            'public_qr_enabled',
+            'Enable Public QR Access',
+            array($this, 'render_checkbox_field'),
+            $this->page_slug,
+            'fsbhoa_lighting_section_remote',
+            ['id' => 'public_qr_enabled', 'desc' => 'If checked, residents do not need to log in to the website to activate lights. A recent gate swipe is still required.']
+        );
+
+        add_settings_field(
             'bluehost_qr_url',
             'Public QR Scan URL',
             array($this, 'render_field'), 
@@ -309,6 +318,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         $output['plc2_address'] = isset( $input['plc2_address'] ) ? sanitize_text_field( $input['plc2_address'] ) : '';
         $output['go_service_api_key'] = isset( $input['go_service_api_key'] ) ? sanitize_text_field( $input['go_service_api_key'] ) : ($output['go_service_api_key'] ?? '');
         $output['map_image_url'] = isset( $input['map_image_url'] ) ? esc_url_raw( $input['map_image_url'] ) : '';
+        $output['public_qr_enabled'] = isset( $input['public_qr_enabled'] ) ? (bool)$input['public_qr_enabled'] : false;
 
         // Save Access Control URL (remove trailing slash for consistency)
         if ( ! empty( $input['access_control_url'] ) ) {
@@ -347,6 +357,7 @@ class Fsbhoa_Lighting_Admin_Settings {
             'LightingAPIBaseURL' => site_url(),
             'AccessControlAPIKey' => $options['access_control_api_key'] ?? '',
             'AccessControlURL' => $options['access_control_url'] ?? '',
+            'PublicQREnabled' => isset($options['public_qr_enabled']) ? (bool)$options['public_qr_enabled'] : false,
         ];
 
         $json_data = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);

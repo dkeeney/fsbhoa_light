@@ -101,7 +101,8 @@ function fsbhoa_render_auto_trigger( $atts ) {
     $cookie_name = "fsbhoa_token_" . $scan_id;
 
     // A. Login Check
-    if ( ! is_user_logged_in() ) {
+    $public_enabled = get_option('fsbhoa_public_qr_enabled', 0);
+    if ( ! is_user_logged_in() && !$public_enabled) {
         return fsbhoa_render_login_required_ui();
     }
 
@@ -200,6 +201,8 @@ function fsbhoa_handle_light_request() {
     check_ajax_referer( 'fsbhoa_light_req_nonce', 'nonce' );
     $zone_id = isset($_POST['zone_id']) ? intval($_POST['zone_id']) : 0;
     $current_user = wp_get_current_user();
+    $user_email = $current_user->exists() ? $current_user->user_email : 'public_guest';
+
     global $wpdb;
     $table_name = $wpdb->prefix . 'lighting_queue';
 
@@ -208,7 +211,7 @@ function fsbhoa_handle_light_request() {
         WHERE zone_id = %d AND user_email = %s
         AND (status IN ('pending', 'processing') OR (status = 'success' AND updated_at > DATE_SUB(NOW(), INTERVAL 2 MINUTE)))
         ORDER BY created_at DESC LIMIT 1
-    ", $zone_id, $current_user->user_email ) );
+    ", $zone_id, $user_email ) );
 
     if ( $existing_job ) {
         job_log($existing_job->id, "Resident re-scanned. Re-using existing job (Status: {$existing_job->status})");
@@ -216,10 +219,10 @@ function fsbhoa_handle_light_request() {
     }
 
     // CREATE NEW JOB
-    $result = $wpdb->insert($table_name, array('zone_id' => $zone_id, 'user_email' => $current_user->user_email, 'status' => 'pending'));
+    $result = $wpdb->insert($table_name, array('zone_id' => $zone_id, 'user_email' => $user_email, 'status' => 'pending'));
     if ( $result ) {
         $job_id = $wpdb->insert_id;
-        job_log($job_id, "New QR Request for Zone $zone_id by {$current_user->user_email}");
+        job_log($job_id, "New QR Request for Zone $zone_id by {$user_email}");
         wp_send_json_success( array( 'job_id' => $job_id ) );
     } else {
         error_log("Database error while creating a new job");
@@ -284,6 +287,12 @@ function fsbhoa_handle_rest_wait_for_job( $request ) {
 
     if ( $provided_key !== $valid_key ) {
         return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
+    }
+    
+    //  Capture the configuration "push" from the Go Service
+    $public_enabled = $request->get_header('X-Public-QR-Enabled');
+    if ( $public_enabled !== null ) {
+        update_option('fsbhoa_public_qr_enabled', intval($public_enabled));
     }
 
     global $wpdb;
