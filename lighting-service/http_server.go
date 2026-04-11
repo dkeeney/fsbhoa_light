@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -27,6 +29,7 @@ func (app *App) RunServer() error {
 	router.POST("/test/mapping/:id/:state", app.handleTestMapping)
 	router.POST("/trigger-timer/zone/:id", app.handleTriggerTimer)
 	router.GET("/debug/registers", app.handleDebugRegisters)
+	router.GET("/remote-logs", app.handleRemoteLogsProxy)
 
 	// Use ListenPort from config
 	return http.ListenAndServe(app.Config.ListenPort, router)
@@ -195,4 +198,52 @@ func (app *App) handleTriggerTimer(w http.ResponseWriter, r *http.Request, ps ht
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Timer started for zone %d. Lights will expire at %s",
 		zoneID, offTime.Format("15:04"))
+}
+
+func (app *App) handleRemoteLogsProxy(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	// 1. Security check (Optional but recommended)
+	// If you want to restrict this to only your local WP, you can check the API Key
+	/*
+	   if r.Header.Get("X-API-Key") != app.Config.LightingAPIKey {
+	       http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	       return
+	   }
+	*/
+
+	log.Println("Go Proxy: Fetching logs from Bluehost for Dashboard...")
+
+	// 2. Prepare the request to Bluehost
+	// app.Config.BluehostURL should be "https://fsbhoa.com/wp-json/lights/v1/"
+	baseURL := strings.TrimSuffix(app.Config.BluehostURL, "/")
+	apiURL := fmt.Sprintf("%s/debug-db", baseURL)
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		log.Printf("Proxy Error: Failed to create request: %v", err)
+		http.Error(w, "Internal Proxy Error", 500)
+		return
+	}
+
+	req.Header.Set("X-API-Key", app.Config.BluehostAPIKey)
+	req.Header.Set("User-Agent", "FSBHOA-Lighting-Proxy/1.2")
+
+	// 3. Execute the fetch
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Proxy Error: Failed to reach Bluehost: %v", err)
+		http.Error(w, "Service Unavailable (Bluehost Down)", 503)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 4. Stream the response back to WordPress
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*") // Allows local browser to read it
+	w.WriteHeader(resp.StatusCode)
+
+	_, err = io.Copy(w, resp.Body)
+	if err != nil {
+		log.Printf("Proxy Error: Failed to stream response: %v", err)
+	}
 }

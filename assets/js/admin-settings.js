@@ -4,7 +4,7 @@ jQuery(document).ready(function($) {
     
     let mediaFrame;
 
-    // --- NEW: Media Uploader Button Handler ---
+    // ---  Media Uploader Button Handler ---
     $('#fsbhoa-upload-map_image_url-button').on('click', function(e) {
         e.preventDefault();
         
@@ -222,5 +222,90 @@ jQuery(document).ready(function($) {
     } else {
         console.error("Initial status check skipped: Status span not found."); // Debug: Check if element exists on load
     }
+
+    // -- For QR request log. --
+    $('#fsbhoa-refresh-qr-log').on('click', function() {
+        var $button = $(this);
+        var $container = $('#fsbhoa-qr-log-feed');
+
+        $button.prop('disabled', true).find('.dashicons').addClass('spin');
+        $container.html('<p>Fetching logs...</p>');
+
+        $.ajax({
+            url: fsbhoa_lighting_admin_vars.ajax_url,
+            method: 'POST',
+            data: {
+                action: 'fsbhoa_proxy_bluehost_logs',
+                nonce: fsbhoa_lighting_admin_vars.manage_nonce
+            },
+            success: function(response) {
+                if (response.success) {
+                    var jobList = response.data;
+                    if (!jobList || jobList.length === 0) {
+                        $container.html('<p>No logs found.</p>');
+                        return;
+                    }
+
+                    var html = '';
+                    jobList.forEach(function(job) {
+                        var email   = job.user_email || job.UserEmail || 'Unknown';
+                        var zone    = job.zone_id || job.ZoneID || '??';
+                        var status  = job.status || job.Status || 'unknown';
+                        var trace   = job.log_details || job.LogDetails || 'No trace.';
+                        var id      = job.id || '0';
+                        var created = job.created_at || job.CreatedAt || '';
+
+                        var dateObj = new Date(created.replace(/-/g, "/"));
+
+                        // Format the Header Time (12-hour for readability)
+                        var localTime = dateObj.toLocaleString('en-US', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            hour12: true
+                        });
+
+                        // Define our "Hard" indents using standard spaces
+                        var indent1 = "    ";       // 4 spaces
+                        var indent2 = "        ";   // 8 spaces
+
+                        // Build the plain-text string
+                        var textBlock = `[JOB ID]: ${id}\n`;
+                        textBlock += `${indent1}[TIME]:   ${localTime}\n`;
+                        textBlock += `${indent1}[STATUS]: ${status}\n`;
+                        textBlock += `${indent1}[USER]:   ${email}\n`;
+                        textBlock += `${indent1}[ZONE]:   ${zone}\n`;
+                        textBlock += `${indent1}[TRACE]:\n`;
+
+                        // Indent every line of the trace
+                        var traceLines = trace.split('\n');
+                        traceLines.forEach(function(line) {
+                            if (line.trim().length > 0) {
+                                textBlock += `${indent2}${line}\n`;
+                            }
+                        });
+
+                        // Inject as a single PRE block
+                        html += '<div style="margin-bottom: 20px; border-bottom: 1px solid #ddd; padding-bottom: 10px;">';
+                        html += '  <pre style="background: #fdfdfd; padding: 10px; border-left: 5px solid #0073aa; margin: 0; font-family: monospace; white-space: pre;">' + textBlock + '</pre>';
+                        html += '</div>';
+                    });
+
+                    $container.html(html);
+                } else {
+                    $container.html('<p style="color:red;">Error: ' + response.data + '</p>');
+                }
+            },
+            complete: function() {
+                $button.prop('disabled', false).find('.dashicons').removeClass('spin');
+            }
+        });
+    });
+    
+    // CSS for the spinning icon
+    $('<style>@keyframes spin { from {transform:rotate(0deg);} to {transform:rotate(360deg);} } .spin { animation: spin 1s linear infinite; }</style>').appendTo('head');
 
 }); // End document ready

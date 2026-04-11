@@ -21,21 +21,21 @@ jQuery(document).ready(function($) {
                 
                 // If the job was already successful (reused), skip to finished
                 if (response.data.status === 'success') {
-                    redirectToFinished('success');
+                    redirectToFinished('success', response.data.job_id);
                 } else {
                     startPolling(response.data.job_id);
                 }
             } else {
                 console.error("FSBHOA: Initial request failed.");
-                redirectToFinished('error');
+                redirectToFinished('error', response.data.job_id);
             }
         }).fail(function() {
-            redirectToFinished('server_error');
+            redirectToFinished('server_error', response.data.job_id);
         });
     }
 
     // 2. STATUS POLLING ENGINE
-    function startPolling(jobId) {
+    function startPolling(job_id) {
         $('.fsbhoa-status-msg').text("Request sent. Waiting for controller...");
 
         pollInterval = setInterval(function() {
@@ -43,7 +43,7 @@ jQuery(document).ready(function($) {
 
             $.post(fsbhoa_vars.ajax_url, {
                 action: 'fsbhoa_check_status',
-                job_id: jobId
+                job_id: job_id
             }, function(response) {
                 if (response.success) {
                     var currentStatus = response.data.status;
@@ -52,7 +52,7 @@ jQuery(document).ready(function($) {
                     // If status is no longer "waiting", we move to the final UI
                     if (currentStatus !== 'pending' && currentStatus !== 'processing') {
                         stopPolling();
-                        redirectToFinished(currentStatus);
+                        redirectToFinished(currentStatus, job_id);
                     }
                 }
             });
@@ -60,7 +60,7 @@ jQuery(document).ready(function($) {
             // Safety check: Don't let the spinner run forever
             if (timeoutCounter >= maxWaitSeconds) {
                 stopPolling();
-                redirectToFinished('timeout');
+                redirectToFinished('timeout', job_id);
             }
         }, 2000); // Check every 2 seconds
     }
@@ -70,11 +70,11 @@ jQuery(document).ready(function($) {
     }
 
     // 3. THE REDIRECTOR (Stage 2 -> Stage 3)
-    function redirectToFinished(status) {
+    function redirectToFinished(status, job_id) {
         // Build the URL for the Stage 3 Finished UI
         // We use window.location.pathname to strip existing query args but keep the base URL
-        var finalUrl = window.location.pathname + "?finished=1&status=" + status;
-        
+        var finalUrl = window.location.pathname + "?finished=1&status=" + status + "&job_id=" + (job_id || 0);
+
         console.log("FSBHOA: Redirecting to " + finalUrl);
         window.location.href = finalUrl;
     }

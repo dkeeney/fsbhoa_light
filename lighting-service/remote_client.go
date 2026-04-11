@@ -29,11 +29,17 @@ func (app *App) StartBluehostPoller() {
 	client := &http.Client{Timeout: 70 * time.Second}
 
 	for {
+		// PROTECT: Don't poll if we don't have a valid config yet
+		if app.PLCConfig == nil || len(app.PLCConfig.Zones) == 0 {
+			log.Println("Poller waiting: PLC Configuration not yet loaded...")
+			time.Sleep(10 * time.Second)
+			continue
+		}
 		// 1. Long Poll Request
 		job, err := performLongPoll(client, app.Config)
 		if err != nil {
-			log.Printf("Poller Error (Retrying in 10s): %v", err)
-			time.Sleep(10 * time.Second) // Backoff
+			log.Printf("Poller Error (Retrying in 30s): %v", err)
+			time.Sleep(30 * time.Second) // Backoff
 			continue
 		}
 
@@ -43,8 +49,7 @@ func (app *App) StartBluehostPoller() {
 		}
 
 		if job.Status == "found" {
-			// Fix the typo: ZoneID is an int, use %d
-			log.Printf("Job #%d Received: Turn on Zone %d for %s", job.JobID, job.ZoneID, job.Email)
+			log.Printf("[JOB %d] Received: Turn on Zone %d for %s", job.JobID, job.ZoneID, job.Email)
 
 			// A. Pre-fetch Zone and Schedule (Single Source of Truth)
 			var targetZone *FullConfigZone
@@ -57,7 +62,7 @@ func (app *App) StartBluehostPoller() {
 
 			if targetZone == nil {
 				log.Printf("Job #%d REJECTED: Zone %d not found in config", job.JobID, job.ZoneID)
-				app.reportStatus(job.JobID, "zone_not_found")
+				app.reportStatus(job.JobID, "zone_not_found", "REJECTED")
 				continue
 			}
 
@@ -76,27 +81,31 @@ func (app *App) StartBluehostPoller() {
 					duration)
 				if !allowed {
 					log.Printf("Job #%d REJECTED: %s", job.JobID, reason)
-					app.reportStatus(job.JobID, reason) // e.g., "outside_qr_window"
+					msg := "Request not allowed"
+					app.reportStatus(job.JobID, reason, msg) // e.g., "outside_qr_window"
 					continue
 				}
 
 				offTime := time.Now().Add(time.Duration(duration) * time.Minute)
 				qroffValue := uint16(offTime.Hour()*100 + offTime.Minute())
+				log.Printf("[JOB %d] SUCCESS: Writing %d to PLC for Zone %d", job.JobID, qroffValue, job.ZoneID)
 
 				if app.PLCConfig != nil {
 					if err := SetZoneQROff(app.Config, app.PLCConfig, job.ZoneID, qroffValue); err != nil {
 						log.Printf("Job #%d Error: PLC write failed: %v", job.JobID, err)
-						app.reportStatus(job.JobID, "error_plc_failed")
+						app.reportStatus(job.JobID, "error_plc_failed", "PLC Write Error")
 					} else {
-						log.Printf("Job #%d Success: Zone %d activated until %d.", job.JobID, job.ZoneID, qroffValue)
-						app.reportStatus(job.JobID, "success")
+						successMsg := fmt.Sprintf("PLC updated for zone %d, until %s, for %s (rfid %s)",
+							job.ZoneID, job.Email, qroffValue, rfid)
+						log.Printf("Job #%d Success: %s", successMsg)
+						app.reportStatus(job.JobID, "success", successMsg)
 						go app.LogQRSuccessToWordPress(*job, targetZone.ZoneName, rfid)
 					}
 				}
 			} else {
-				// This is the branch that was causing the infinite spinner
+				msg := fmt.Sprintf("Access Denied: No gate swipe found for %s in last 4 hrs", job.Email)
 				log.Printf("Job #%d: Swipe not verified for %s.", job.JobID, job.Email)
-				app.reportStatus(job.JobID, "denied_no_swipe")
+				app.reportStatus(job.JobID, "denied_no_swipe", msg)
 			}
 		}
 		time.Sleep(1 * time.Second)
@@ -113,7 +122,7 @@ func performLongPoll(client *http.Client, cfg Config) (*PollResponse, error) {
 	}
 
 	// AUTH & FORMAT HEADERS
-	req.Header.Set("User-Agent", "curl/7.81.0")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FSBHOA-Lighting/1.1")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-API-Key", cfg.BluehostAPIKey)
 
@@ -169,37 +178,39 @@ func verifyLocalSwipe(cfg Config, email string) (bool, string) {
 	return data.IsValid, data.RFID
 }
 
-func (app *App) reportStatus(jobID int, status string) {
+func (app *App) reportStatus(jobID int, status string, message string) {
 	apiURL := fmt.Sprintf("%supdate-job", app.Config.BluehostURL)
 
 	// 1. Prepare form data for the body instead of the URL
 	data := url.Values{}
 	data.Set("job_id", strconv.Itoa(jobID))
 	data.Set("status", status)
+	data.Set("message", message)
 
 	// 2. Pass the encoded data as a Reader
 	req, err := http.NewRequest("POST", apiURL, strings.NewReader(data.Encode()))
 	if err != nil {
-		log.Printf("Failed to create request: %v", err)
+		log.Printf("[JOB %d] Failed to create reportStatus request: %v", jobID, err)
 		return
 	}
 
 	// 3. Set Content-Type so WordPress knows how to parse the body
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-API-Key", app.Config.BluehostAPIKey)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 	req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
-	req.Header.Set("X-API-Key", app.Config.BluehostAPIKey)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Connection", "close")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Failed to report status to Bluehost: %v", err)
+		log.Printf("[JOB %d] Network error reporting status: %v", jobID, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("Bluehost update-job returned status: %d", resp.StatusCode)
+		log.Printf("[JOB %d] Bluehost returned error %d during status report", jobID, resp.StatusCode)
 	}
 }
 
@@ -352,20 +363,25 @@ func (app *App) LogQRSuccessToWordPress(job PollResponse, zoneName string, rfid 
 		"EventMessage": fmt.Sprintf("QR Scan: %s activated", zoneName),
 	}
 
-	jsonData, _ := json.Marshal(payload)
 	apiURL := fmt.Sprintf("%s/wp-json/fsbhoa/v1/monitor/log-event", app.Config.AccessControlURL)
+	apiKey := app.Config.AccessControlAPIKey
 
-	req, _ := http.NewRequest("POST", apiURL, strings.NewReader(string(jsonData)))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-KEY", app.Config.AccessControlAPIKey) // Use your existing key logic
+	go func(p map[string]interface{}, u string, k string) {
+		jsonData, _ := json.Marshal(p)
+		req, err := http.NewRequest("POST", u, strings.NewReader(string(jsonData)))
+		if err != nil {
+			return
+		}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	go func() {
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-KEY", k)
+
+		client := &http.Client{Timeout: 5 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("Audit Log Error: %v", err)
 			return
 		}
 		defer resp.Body.Close()
-	}()
+	}(payload, apiURL, apiKey) // Pass variables into the closure!
 }

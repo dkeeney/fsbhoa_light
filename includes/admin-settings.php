@@ -28,6 +28,7 @@ class Fsbhoa_Lighting_Admin_Settings {
         // AJAX handler for generating API key
         add_action( 'wp_ajax_fsbhoa_generate_lighting_api_key', array( $this, 'ajax_generate_api_key' ) );
 
+        add_action( 'wp_ajax_fsbhoa_proxy_bluehost_logs', array( $this, 'ajax_proxy_bluehost_logs' ) );
     }
 
     /**
@@ -448,11 +449,50 @@ class Fsbhoa_Lighting_Admin_Settings {
                     </tr>
                 </tbody>
             </table>
+            <hr>
+            <h2>Live QR Request Log</h2>
+            <p>View the 7-day "Flight Recorder" history for all QR scan lighting requests.</p>
+
+            <button type="button" id="fsbhoa-refresh-qr-log" class="button button-secondary">
+                <span class="dashicons dashicons-update" style="vertical-align: middle; margin-top: 4px;"></span> Refresh Log
+            </button>
+            
+            <div id="fsbhoa-qr-log-feed" style="margin-top: 20px; max-height: 600px; overflow-y: auto; background: #f0f0f1; padding: 10px; border: 1px solid #ccd0d4;">
+                <p>Click "Refresh Log" to load data...</p>
+            </div>
+
             <style>
-                /* Simple status indicator styles */
-                .fsbhoa-status-indicator { padding: 3px 8px; border-radius: 3px; color: white; font-weight: bold; }
-                .fsbhoa-status-indicator.is-running { background-color: #228B22; } /* ForestGreen */
-                .fsbhoa-status-indicator.is-stopped { background-color: #DC143C; } /* Crimson */
+                .qr-log-entry {
+                    background: #fff;
+                    border: 1px solid #ddd;
+                    margin-bottom: 15px;
+                    padding: 15px;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+                }
+                .qr-log-header {
+                    border-bottom: 2px solid #eee;
+                    padding-bottom: 8px;
+                    margin-bottom: 10px;
+                    font-weight: bold;
+                    display: flex;
+                    justify-content: space-between;
+                }
+                .qr-log-entry pre {
+                    background: #272822;
+                    color: #f8f8f2;
+                    padding: 10px;
+                    overflow-x: auto;
+                    font-size: 12px;
+                    line-height: 1.4;
+                    margin: 0;
+                }
+                .status-label {
+                    text-transform: uppercase;
+                    font-size: 10px;
+                    padding: 2px 6px;
+                    border-radius: 3px;
+                    margin-left: 10px;
+                }
             </style>
         </div>
         <?php
@@ -505,15 +545,57 @@ class Fsbhoa_Lighting_Admin_Settings {
         if ($hook !== 'toplevel_page_' . $this->page_slug) { return; } // Correct hook for top-level
 
         wp_enqueue_media();
+        $options = get_option($this->option_name, []);
 
         $script_handle = 'fsbhoa-lighting-settings-script';
         wp_enqueue_script($script_handle, plugin_dir_url(__FILE__) . '../assets/js/admin-settings.js', ['jquery', 'media-upload'], '1.1.0', true); // Added media-upload
         wp_localize_script($script_handle, 'fsbhoa_lighting_admin_vars', [
             'ajax_url' => admin_url('admin-ajax.php'),
             'save_nonce' => wp_create_nonce('fsbhoa_lighting_settings_nonce'),
-            'manage_nonce' => wp_create_nonce('fsbhoa_manage_lighting_nonce') // New nonce for manage actions
+            'manage_nonce' => wp_create_nonce('fsbhoa_manage_lighting_nonce'), 
         ]);
     }
+
+    /**
+     * AJAX handler to fetch Bluehost logs via the Go Service Proxy.
+     */
+    public function ajax_proxy_bluehost_logs() {
+        // 1. Security Check
+        check_ajax_referer('fsbhoa_manage_lighting_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permission denied.');
+        }
+
+        // 2. Get the local Go service port from settings
+        $options = get_option($this->option_name, []);
+        $port = isset($options['go_service_port']) ? $options['go_service_port'] : 8085;
+
+        // 3. Call the Go Service's new proxy endpoint
+        // We use 127.0.0.1 to keep the traffic internal to the PC
+        $local_url = "http://127.0.0.1:{$port}/remote-logs";
+
+        $response = wp_remote_get($local_url, array(
+            'timeout' => 20,
+            'headers' => array(
+                'X-API-Key' => $options['go_service_api_key'] ?? ''
+            )
+        ));
+
+        // 4. Handle Errors
+        if ( is_wp_error($response) ) {
+            wp_send_json_error('Go Service Unreachable: ' . $response->get_error_message());
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        if ($status_code !== 200) {
+            wp_send_json_error('Go Proxy returned error code: ' . $status_code);
+        }
+
+        // 5. Pass the data back to the Javascript Dashboard
+        $data = json_decode(wp_remote_retrieve_body($response));
+        wp_send_json_success($data);
+    }
+
 } // End of class Fsbhoa_Lighting_Admin_Settings
 
 
@@ -541,4 +623,6 @@ function fsbhoa_lighting_sudoers_notice() {
     }
 }
 add_action( 'admin_notices', 'fsbhoa_lighting_sudoers_notice' );
+
+
 

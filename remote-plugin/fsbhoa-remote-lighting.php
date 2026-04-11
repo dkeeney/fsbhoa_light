@@ -2,13 +2,14 @@
 /**
  * Plugin Name: FSBHOA Remote Lighting (QR scan)
  * Description: Handles court lighting requests via QR Code (Auto-Trigger).
- * Version: 1.3
+ * Version: 1.6
  * Author: FSBHOA IT Committee
  * Install with a shortcode: [court_lights]
  */
 
 defined( 'ABSPATH' ) or die( 'Unauthorized Access' );
 define( 'FSBHOA_REMOTE_URL', plugin_dir_url( __FILE__ ) );
+date_default_timezone_set('America/Los_Angeles');
 
 /**
  * 1. Database Setup & Assets
@@ -22,6 +23,7 @@ register_activation_hook( __FILE__, function() {
         zone_id mediumint(9) NOT NULL,
         user_email varchar(100) NOT NULL,
         status varchar(20) DEFAULT 'pending',
+        log_details TEXT DEFAult NULL,
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY  (id),
@@ -32,7 +34,7 @@ register_activation_hook( __FILE__, function() {
 });
 
 add_action( 'wp_enqueue_scripts', function() {
-    wp_register_script('fsbhoa-remote-js', FSBHOA_REMOTE_URL . 'assets/lighting-remote.js', array('jquery'), '1.5', true);
+    wp_register_script('fsbhoa-remote-js', FSBHOA_REMOTE_URL . 'assets/lighting-remote.js', array('jquery'), '1.6', true);
     wp_localize_script('fsbhoa-remote-js', 'fsbhoa_vars', array(
         'ajax_url' => admin_url( 'admin-ajax.php' ),
         'nonce'    => wp_create_nonce( 'fsbhoa_light_req_nonce' )
@@ -49,6 +51,7 @@ add_action( 'template_redirect', function() {
 
     $zone_id = isset($_GET['zone_id']) ? intval($_GET['zone_id']) : 0;
     $step    = isset($_GET['step']) ? intval($_GET['step']) : 1;
+    error_log("Incoming request, zone " . $zone_id . ", step " . $step);
 
     // Stage 1 logic: Set cookie and redirect to Step 2
     if ( $step === 1 && $zone_id > 0 ) {
@@ -83,11 +86,13 @@ function fsbhoa_render_auto_trigger( $atts ) {
     // --- STAGE 3: RESULT SCREEN ---
     if ( isset($_GET['finished']) ) {
         $status  = isset($_GET['status']) ? sanitize_key($_GET['status']) : 'error';
-        return fsbhoa_render_finished_ui($status);
+        $job_id = isset($_GET['job_id']) ? intval($_GET['job_id']) : 0;
+        return fsbhoa_render_finished_ui($job_id, $status);
     }
 
     // --- ERROR CHECK: No Zone ---
     if ( $zone_id === 0 ) {
+        error_log("No valid zone specified.");
         return '<p style="color:red; text-align:center;">Error: No valid zone specified.</p>';
     }
 
@@ -126,7 +131,12 @@ function fsbhoa_render_spinner_ui($zone_id) {
     <?php return ob_get_clean();
 }
 
-function fsbhoa_render_finished_ui($status) {
+function fsbhoa_render_finished_ui($job_id, $status) {
+    if ( $job_id > 0 ) {
+        job_log($job_id, "Resident reached Finished screen with status: $status");
+    } else {
+        error_log("No job_id; Resident reached Finished screen with status: $status");
+    }
     ob_start(); ?>
     <div style="text-align:center; padding:30px;">
         <?php if ( $status === 'success' ): ?>
@@ -163,6 +173,7 @@ function fsbhoa_render_finished_ui($status) {
 
 
 function fsbhoa_render_login_required_ui() {
+    error_log("Login Required. ");
     return '
                 <div style="text-align:center; padding:40px;">
                     <div style="font-size: 50px;">??</div>
@@ -200,13 +211,18 @@ function fsbhoa_handle_light_request() {
     ", $zone_id, $current_user->user_email ) );
 
     if ( $existing_job ) {
+        job_log($existing_job->id, "Resident re-scanned. Re-using existing job (Status: {$existing_job->status})");
         wp_send_json_success( array('job_id' => $existing_job->id, 'status' => $existing_job->status) );
     }
 
+    // CREATE NEW JOB
     $result = $wpdb->insert($table_name, array('zone_id' => $zone_id, 'user_email' => $current_user->user_email, 'status' => 'pending'));
     if ( $result ) {
-        wp_send_json_success( array( 'job_id' => $wpdb->insert_id ) );
+        $job_id = $wpdb->insert_id;
+        job_log($job_id, "New QR Request for Zone $zone_id by {$current_user->user_email}");
+        wp_send_json_success( array( 'job_id' => $job_id ) );
     } else {
+        error_log("Database error while creating a new job");
         wp_send_json_error( 'Database error.' );
     }
 }
@@ -215,7 +231,7 @@ add_action( 'wp_ajax_fsbhoa_check_status', function() {
     $job_id = isset($_POST['job_id']) ? intval($_POST['job_id']) : 0;
     global $wpdb;
     $status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM " . $wpdb->prefix . "lighting_queue WHERE id = %d", $job_id ) );
-    wp_send_json_success( array( 'status' => $status ) );
+    wp_send_json_success( array( 'status' => $status, 'job_id' => $job_id ) );
 });
 
 
@@ -250,7 +266,7 @@ add_action( 'rest_api_init', function () {
         'callback' => function() {
             global $wpdb;
             $table = $wpdb->prefix . 'lighting_queue';
-            $results = $wpdb->get_results("SELECT * FROM $table ORDER BY id DESC LIMIT 10");
+            $results = $wpdb->get_results("SELECT * FROM $table ORDER BY id DESC");
             return rest_ensure_response($results);
         },
         'permission_callback' => '__return_true',
@@ -276,11 +292,11 @@ function fsbhoa_handle_rest_wait_for_job( $request ) {
     $max_wait = 15;
 
     // database cleanup
-    $wpdb->query( "DELETE FROM $table_name WHERE updated_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)" );
+    $wpdb->query( "DELETE FROM $table_name WHERE updated_at < DATE_SUB(NOW(), INTERVAL 7 DAY)" );
 
     while ((time() - $start_time) < $max_wait) {
         $wpdb->query("START TRANSACTION");
-        $job = $wpdb->get_row("SELECT * FROM $table_name WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1 FOR UPDATE");
+        $job = $wpdb->get_row("SELECT * FROM $table_name WHERE status IN ('pending', 'processing') ORDER BY created_at ASC LIMIT 1 FOR UPDATE");
 
         try {
             if ($job) {
@@ -292,6 +308,7 @@ function fsbhoa_handle_rest_wait_for_job( $request ) {
                     return new WP_Error( 'db_error', 'Database update failed', array( 'status' => 500 ) );
                 }
                 $wpdb->query("COMMIT");
+                job_log($job->id,"Poller found job. Returning 200 status");
                 return new WP_REST_Response(array(
                     "status" => "found",
                     "job_id" => (int)$job->id,
@@ -325,16 +342,21 @@ function fsbhoa_handle_rest_update_job( $request ) {
     $provided_key = $request->get_header('X-API-Key');
 
     if ( $provided_key !== $valid_key ) {
+        error_log("fsbhoa_handle_rest_update_job() called with bad API Key.");
         return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
     }
 
     // Explicitly grab params from the request object
     $job_id = $request->get_param('job_id');
     $status = sanitize_key($request->get_param('status'));
+    $msg    = sanitize_text_field($request->get_param('message'));
+    if (!$msg) { $msg = "Status returned: $status"; }
 
     if ( ! $job_id ) {
+        error_log("fsbhoa_handle_rest_update_job() called with no job id.");
         return new WP_Error( 'missing_id', 'Job ID is required', array( 'status' => 400 ) );
     }
+    job_log($job_id, $msg);
 
     global $wpdb;
     $table_name = $wpdb->prefix . 'lighting_queue';
@@ -348,6 +370,8 @@ function fsbhoa_handle_rest_update_job( $request ) {
         array('%d')  // Format for id
     );
 
+    job_log($job_id, "returned success = " . ($updated !== false));
+
     return new WP_REST_Response(array(
         "success" => $updated !== false,
         "job_id"  => $job_id,
@@ -356,3 +380,28 @@ function fsbhoa_handle_rest_update_job( $request ) {
 }
 
 
+function job_log($job_id, $message) {
+    if (!$job_id) return;
+
+    // Mirror to standard error log
+    error_log("FSBHOA Job $job_id: $message");
+
+    global $wpdb;
+    $table = $wpdb->prefix . 'lighting_queue';
+
+    // Update log details
+    // Using DATE_FORMAT with %h:%i:%s %p for "12:28:45 PM"
+    $wpdb->query($wpdb->prepare(
+        "UPDATE $table
+         SET log_details = CONCAT(
+             IFNULL(log_details, ''),
+             DATE_FORMAT(NOW(), '[%%h:%%i:%%s %%p] '),
+             %s,
+             '\n'
+         ),
+         updated_at = NOW()
+         WHERE id = %d",
+        $message,
+        $job_id
+    ));
+}
