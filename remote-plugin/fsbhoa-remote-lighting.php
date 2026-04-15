@@ -77,6 +77,19 @@ add_action( 'template_redirect', function() {
     }
 });
 
+// these allow guests to trigger the light request
+add_action( 'wp_ajax_nopriv_fsbhoa_request_lights', 'fsbhoa_handle_light_request' );
+
+// These allow guests to check the status
+add_action( 'wp_ajax_nopriv_fsbhoa_check_status', function() {
+    // Re-use the existing logic inside the anonymous function you already have
+    $job_id = isset($_POST['job_id']) ? intval($_POST['job_id']) : 0;
+    global $wpdb;
+    $status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM " . $wpdb->prefix . "lighting_queue WHERE id = %d", $job_id ) );
+    wp_send_json_success( array( 'status' => $status, 'job_id' => $job_id ) );
+});
+
+
 /**
  * 3. THE SHORTCODE ROUTER [court_lights]
  */
