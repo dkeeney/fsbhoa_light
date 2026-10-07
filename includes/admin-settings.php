@@ -219,7 +219,7 @@ class Fsbhoa_Lighting_Admin_Settings {
             [
                 'id' => 'access_control_api_key',
                 'type' => 'password',
-                'desc' => 'The Kiosk API Key from the Access Control system.'
+                'desc' => 'The Access Verification API Key from the Access Control system (FSBHOA AC General settings).'
             ]
         );
     }
