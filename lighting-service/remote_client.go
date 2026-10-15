@@ -102,9 +102,9 @@ func (app *App) StartBluehostPoller() {
 						log.Printf("Job #%d Error: PLC write failed: %v", job.JobID, err)
 						app.reportStatus(job.JobID, "error_plc_failed", "PLC Write Error")
 					} else {
-						successMsg := fmt.Sprintf("PLC updated for zone %d, until %s, for %s (rfid %s)",
-							job.ZoneID, job.Email, qroffValue, rfid)
-						log.Printf("Job #%d Success: %s", successMsg)
+						successMsg := fmt.Sprintf("PLC updated for zone %d, until %04d, for %s (rfid %s)",
+							job.ZoneID, qroffValue, job.Email, rfid)
+						log.Printf("Job #%d Success: %s", job.JobID, successMsg)
 						app.reportStatus(job.JobID, "success", successMsg)
 						go app.LogQRSuccessToWordPress(*job, targetZone.ZoneName, rfid)
 					}

@@ -127,14 +127,34 @@ func (app *App) startTimeSyncer() {
 
 	// Run once immediately on startup
 	app.syncAllPLCsTime()
+	app.refreshSolarSchedules()
 
-	// Run on every tick
+	// Run on every tick. Once a day (3 AM, after any DST change) fix the
+	// PLC clocks, then re-push the schedules so SUNDOWN/SUNRISE track today's sun.
 	for range ticker.C {
 		now := time.Now()
 		if now.Hour() == 3 {
 			app.syncAllPLCsTime()
+			app.refreshSolarSchedules()
 		}
 	}
+}
+
+// refreshSolarSchedules re-fetches the config from WordPress (falling back to
+// the cached copy) and rewrites the schedules with today's sunrise/sunset.
+func (app *App) refreshSolarSchedules() {
+	configData, err := FetchConfigurationFromAPI(app.Config)
+	if err != nil {
+		log.Printf("Solar refresh: config fetch failed, using cached config: %v", err)
+		configData = app.PLCConfig
+	} else {
+		app.PLCConfig = configData
+	}
+	if configData == nil {
+		log.Println("Solar refresh skipped: no configuration available.")
+		return
+	}
+	RefreshSolarSchedules(app.Config, configData)
 }
 
 // syncAllPLCsTime iterates over all configured PLCs and sets their time.

@@ -189,6 +189,22 @@ func PushConfigurationToPLCs(cfg Config, data *FullConfigurationData) error {
 	return nil
 }
 
+// RefreshSolarSchedules recomputes today's sunrise/sunset and rewrites the
+// schedule registers. Unlike PushConfigurationToPLCs it does NOT trigger a
+// Global Sync (C151), so manual overrides and running QR timers survive.
+// The PLC picks up the new times on its next SCHED_ENGINE pass and only
+// pulses relays if a schedule actually changes state.
+func RefreshSolarSchedules(cfg Config, data *FullConfigurationData) error {
+	log.Println("Starting daily solar schedule refresh...")
+	applySolarTranslations(cfg, data)
+	if err := ConfigureSchedules(cfg, data); err != nil {
+		log.Printf("Error refreshing schedules: %v", err)
+		return err
+	}
+	log.Println("Solar schedule refresh complete.")
+	return nil
+}
+
 // ---  ConfigureSchedules ---
 func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 	log.Println("Starting configuration push to all PLCs...")
@@ -262,7 +278,7 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 
 		loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
 		if loopIndex == -1 {
-			log.Printf("Warning: Skipping mapping '%s' with invalid output '%s'", mapping.ID, mapping.PLCOutputs[0])
+			log.Printf("Warning: Skipping mapping %d with invalid output '%s'", mapping.ID, mapping.PLCOutputs[0])
 			continue
 		}
 
