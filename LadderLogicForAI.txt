@@ -1,7 +1,7 @@
 ## Main Program
 //  LODGE Lighting controller Ladder Logic
 //  David Keeney, Nov 9, 2025
-//  User Account:   admin,  bakersfield12
+//  User Account:   (credentials kept offline - not in this public repo)
 //  Version 2.1, Adds timed lights for QR codes
 //
 // Note:  This hardware has the following restrictions:
@@ -63,7 +63,7 @@ Rung 5: [C153] -> (COPY 24 -> DS6)  // number of lights on master (Lodge)
 Rung 6: [NOT C153] [X001] -> (SET C154)
 Rung 7: [NOT C153] [NOT X001] -> (RST C154)
 
-// Slave will poll for photocell state every 1 second (SC7).
+// Master (Lodge) polls the Slave (Cabana) for photocell state every 1 second (SC7).
 Rung 8: [C153] [SC7] -> (RECV Via WLAN IP: 192.168.42.61
                              ServerPortNo: 502, Slave ID 2
                              Modbus Function code: 01
@@ -338,7 +338,7 @@ Rung 12: [C1021] -> (MATH DS22 = DS5 + 970)   // Ptr to prev QREnd (DS971+)
 Rung 13: [C1021] -> (COPY DS[DS12] -> DS56)   // value of curr state of schedule (DS1050-DS1061)
 Rung 14: [C1021] -> (COPY DS[DS11] -> DS57)   // value of prev state of schedule (DS1100-DS1111)
 Rung 15: [C1021] -> (COPY DS[DS18] -> DS19)   // value of curr QREnd (HHMM) (from DS941-DS964)
-Rung 16: [C1021] -> (COPY DS[DS22] -> DS23)   // value of prev QREnd (HHMM) (from DS971-DS094)
+Rung 16: [C1021] -> (COPY DS[DS22] -> DS23)   // value of prev QREnd (HHMM) (from DS971-DS994)
 
 // == Schedule Transition Check ==
 //   CASE 1, transition to scheduleON   -> RequestON  and kill QREnd
@@ -467,8 +467,8 @@ DS100 to DS939     - Location of Schedule configuration
            +2  OnTime -- Time span starts (HHMM)
            +3  OffTrig  -- turn off by PhotoCell or Time
            +4  OffTime -- Time span ends (HHMM) 24hr inclusive
-DS941 to DS965    - curr QROff Time for timed lights (HHMM)  index is light index
-DS971 to DS995    - Prev QROff Time
+DS941 to DS964    - curr QROff Time for timed lights (HHMM)  index is light index
+DS971 to DS994    - Prev QROff Time
 DS1000 to DS1023    Mapping of Schedule slot to use for each light.
 DS1031 to DS1042  - Mapping of Schedule ID for each schedule slot. (used by Go service)
 DS1051 to DS1062  - State of Schedule (0 = Off, 1 = ON, 2 = QR enabed.

@@ -13,10 +13,11 @@ Four parts, each running in a different place:
 2. **Go service** (`lighting-service/`, systemd unit `fsbhoa-lighting.service`, port 8085): the bridge between WordPress and the PLCs over Modbus TCP.
    - `POST /sync`: pulls `/full-config` from WP, computes sunrise/sunset (`applySolarTranslations`), packs schedules into PLC slots, writes the registers, then sets C151 (resync).
    - `/override/zone/:id/:state` and `/test/mapping/:id/:state` set the RequestON/RequestOFF coils. `/trigger-timer/zone/:id` writes the QROff time. `/status` reads the PLC state back. `/debug/registers` dumps raw registers.
-   - Syncs the PLC clocks every hour.
+   - A UI sync (`/sync`) is a **full push plus C151**, which forces every light to its schedule state and cancels manual overrides and running QR timers.
+   - At startup and daily at 3 AM it re-syncs the PLC clocks (DST) and runs `refreshSolarSchedules`, which re-pushes the schedule registers with today's sunrise/sunset **without** C151, so overrides survive. Before this was added (Oct 2026), SUNDOWN times went stale between UI saves and lights came on late.
    - `remote_client.go` long-polls the public HOA site (Bluehost) for QR-code jobs. It checks the Access Control system for a recent gate swipe by that email and checks the schedule's QR window. If both pass, it writes QROff.
 3. **PLC ladder logic** (`LadderLogicForAI.txt`): a hand-written text rendering of the CLICK program. The real PLCs are programmed by hand in CLICK software from this file. Lodge = master (24 lights, C153 set); Cabana = slave (16 lights) and has the photocell on X001, which the Lodge reads via Modbus RECV every second.
-4. **Remote plugin** (`remote-plugin/`): a separate WP plugin installed on the public HOA site. It handles the `[court_lights]` QR page and the `lighting_queue` table, and exposes `wait-for-job` and `update-job`.
+4. **Remote plugin** (`remote-plugin/`): a separate WP plugin installed on the public HOA site (**fsbhoa.com** on Bluehost, not access.fsbhoa.com). It handles the `[court_lights]` QR page and the `lighting_queue` table, and exposes `wait-for-job`, `update-job` and `debug-db`. All three require `X-API-Key` matching the `FSBHOA_LIGHTING_API_KEY` constant in Bluehost's `wp-config.php`. There is deliberately no fallback key.
 
 `softPLC/softPLC.py` is a CLICK emulator (pymodbus + Flask). It **parses and executes `LadderLogicForAI.txt` directly**. The Lodge runs on Modbus 5020 and the Cabana on 5021, each with a dashboard at the Modbus port + 3000. Retentive DS99–DS1112 persist to `retentive_memory_*.json` (untracked). `OrigLadderLogicForAI.txt` is an older snapshot, kept for reference.
 
@@ -53,7 +54,7 @@ Light index = output pair: `loopIndex = (module-1)*8 + (output-1)/2`. On output 
 # Go service
 cd lighting-service && ./build.sh && sudo systemctl restart fsbhoa-lighting.service
 sudo journalctl -u fsbhoa-lighting.service -n 50 --no-pager
-go vet ./...            # no tests exist
+go vet ./...            # keep clean; no unit tests yet (see TODO.md)
 
 # PHP syntax check
 php -l includes/<file>.php
@@ -67,5 +68,7 @@ cd softPLC && python3 softPLC.py plc_config_lodge.json   # and plc_config_cabana
 - This checkout is **live**: `/var/www/html/wp-content/plugins/` symlinks to `/home/pi/fsbhoa_light` and to `remote-plugin/`. PHP/JS edits take effect immediately. Bump the version in `wp_enqueue_script` calls when changing JS, to bust caches.
 - Go changes need a rebuild and restart. The binary `lighting-service/lighting-service` is gitignored.
 - `/var/lib/fsbhoa/` also holds config for sibling FSBHOA systems (access control, etc.). Don't touch those files.
-- The remote plugin deploys to Bluehost as a zip (`*.zip` is gitignored).
+- This Pi is the **testbed** (plugin inactive, PLCs are softPLC on 127.0.0.1). **Production** is `fsbhoa@access.fsbhoa.com` with its checkout at `~/fsbhoa_light`. To deploy: push, then on production run `git pull --ff-only && cd lighting-service && ./build.sh && sudo systemctl restart fsbhoa-lighting.service`. Production logs are in `journalctl -u fsbhoa-lighting.service`.
+- Remote plugin: run `remote-plugin/deploy.sh`, then upload the zip to fsbhoa.com and choose "Replace current with uploaded". The zip must contain a `fsbhoa-remote-lighting/` folder, or WordPress installs it as a second plugin. `*.zip` is gitignored.
+- Never log or commit secrets. The repo is public on GitHub. API keys live in WP settings, `/var/lib/fsbhoa/lighting_service.json` and Bluehost's `wp-config.php`. The startup config log masks them.
 - No automated tests. Verify against the softPLC simulators where possible, not the real PLCs.

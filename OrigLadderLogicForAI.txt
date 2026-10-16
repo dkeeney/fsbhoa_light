@@ -5,7 +5,7 @@ Save it for future reference when working with AI.
 ## Main Program
 //  LODGE Lighting controller Ladder Logic
 //  David Keeney, Nov 9, 2025
-//  User Account:   admin,  bakersfield12
+//  User Account:   (credentials kept offline - not in this public repo)
 //
 // Note:  This hardware has the following restrictions:
 //   No nested Loops or subroutines
