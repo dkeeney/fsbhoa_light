@@ -180,16 +180,5 @@ function fsbhoa_lighting_enqueue_scripts() {
 }
 add_action( 'wp_enqueue_scripts', 'fsbhoa_lighting_enqueue_scripts' );
 
-/**
- * Protects the entire front-end of the site.
- */
-function fsbhoa_require_admin_globally() {
-    if ( is_admin() ) { return; }
-    if ( ! current_user_can( 'manage_options' ) ) {
-        wp_redirect( wp_login_url() );
-        exit;
-    }
-}
-add_action( 'template_redirect', 'fsbhoa_require_admin_globally' );
 
 

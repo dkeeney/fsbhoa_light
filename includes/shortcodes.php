@@ -13,25 +13,44 @@ function fsbhoa_lighting_register_shortcodes() {
 }
 add_action( 'init', 'fsbhoa_lighting_register_shortcodes' );
 
+/**
+ * Helper function to check for admin permissions.
+ */
+function fsbhoa_is_lighting_admin() {
+    return current_user_can( 'manage_options' );
+}
+
 function fsbhoa_lighting_config_page_view() {
+    if ( ! fsbhoa_is_lighting_admin() ) {
+        return '<p style="color:red; font-weight:bold;">Access Denied: Admin only.</p>';
+    }
     ob_start();
     require_once plugin_dir_path( __FILE__ ) . 'views-configuration.php';
     return ob_get_clean();
 }
 
 function fsbhoa_lighting_schedules_page_view() {
+    if ( ! fsbhoa_is_lighting_admin() ) {
+        return '<p style="color:red; font-weight:bold;">Access Denied: Admin only.</p>';
+    }
     ob_start();
     require_once plugin_dir_path( __FILE__ ) . 'views-schedules.php';
     return ob_get_clean();
 }
 
 function fsbhoa_lighting_monitor_page_view() {
+    if ( ! fsbhoa_is_lighting_admin() ) {
+        return '<p style="color:red; font-weight:bold;">Access Denied: Admin only.</p>';
+    }
     ob_start();
     require_once plugin_dir_path( __FILE__ ) . 'views-monitor.php';
     return ob_get_clean();
 }
 
 function fsbhoa_lighting_map_monitor_page_view() {
+    if ( ! fsbhoa_is_lighting_admin() ) {
+        return '<p style="color:red; font-weight:bold;">Access Denied: Admin only.</p>';
+    }
     ob_start();
     require_once plugin_dir_path( __FILE__ ) . 'views-map-monitor.php';
     return ob_get_clean();
