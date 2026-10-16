@@ -28,6 +28,14 @@ type Config struct {
 // Global config variable
 var globalConfig Config
 
+// maskSecret shows only whether a secret is set, never its value.
+func maskSecret(s string) string {
+	if s == "" {
+		return "<unset>"
+	}
+	return "<set>"
+}
+
 func loadConfig(path string) (Config, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -64,7 +72,12 @@ func main() {
 		logOutput = io.MultiWriter(os.Stdout, logFile)
 	}
 	log.SetOutput(logOutput)
-	log.Printf("Loaded configuration: %+v", cfg)
+	// Log a copy with secrets masked so API keys never land in the journal/log file.
+	logCfg := cfg
+	logCfg.LightingAPIKey = maskSecret(cfg.LightingAPIKey)
+	logCfg.BluehostAPIKey = maskSecret(cfg.BluehostAPIKey)
+	logCfg.AccessControlAPIKey = maskSecret(cfg.AccessControlAPIKey)
+	log.Printf("Loaded configuration: %+v", logCfg)
 
 	// 3. Initialize App
 	app := &App{
