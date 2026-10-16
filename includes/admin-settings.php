@@ -138,7 +138,7 @@ class Fsbhoa_Lighting_Admin_Settings {
             array($this, 'render_checkbox_field'),
             $this->page_slug,
             'fsbhoa_lighting_section_remote',
-            ['id' => 'public_qr_enabled', 'desc' => 'If checked, residents do not need to log in to the website to activate lights. A recent gate swipe is still required.']
+            ['id' => 'public_qr_enabled', 'desc' => 'If checked, anyone with the QR code can activate lights: no website login and no gate swipe check. The schedule\'s QR window still applies unless Ignore Solar/Schedule Check is on.']
         );
 
         add_settings_field(
