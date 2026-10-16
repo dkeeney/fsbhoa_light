@@ -2,7 +2,7 @@
 /**
  * Plugin Name: FSBHOA Remote Lighting (QR scan)
  * Description: Handles court lighting requests via QR Code (Auto-Trigger).
- * Version: 1.6
+ * Version: 1.7
  * Author: FSBHOA IT Committee
  * Install with a shortcode: [court_lights]
  */
@@ -255,6 +255,27 @@ add_action( 'wp_ajax_fsbhoa_check_status', function() {
  * 6. REST API ENDPOINTS    (Accessed by fsbhoa-lighting service)
  */
 /**
+ * Permission check for the lighting-service routes.
+ * The key must be defined in wp-config.php:
+ *   define( 'FSBHOA_LIGHTING_API_KEY', '...' );
+ * There is deliberately no fallback: if the constant is missing, every request is refused.
+ */
+function fsbhoa_remote_check_api_key( $request ) {
+    $valid_key = defined('FSBHOA_LIGHTING_API_KEY') ? (string) FSBHOA_LIGHTING_API_KEY : '';
+    if ( $valid_key === '' ) {
+        error_log("fsbhoa-remote-lighting: FSBHOA_LIGHTING_API_KEY is not defined in wp-config.php; refusing request.");
+        return new WP_Error( 'unauthorized', 'API Key not configured', array( 'status' => 403 ) );
+    }
+
+    $provided_key = (string) $request->get_header('X-API-Key');
+    if ( ! hash_equals( $valid_key, $provided_key ) ) {
+        error_log("fsbhoa-remote-lighting: " . $request->get_route() . " called with bad API Key.");
+        return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
+    }
+    return true;
+}
+
+/**
  * CORRECTED REST API REGISTRATION
  */
 add_action( 'rest_api_init', function () {
@@ -266,14 +287,14 @@ add_action( 'rest_api_init', function () {
     register_rest_route( $namespace, '/wait-for-job', array(
         'methods'             => 'GET',
         'callback'            => 'fsbhoa_handle_rest_wait_for_job',
-        'permission_callback' => '__return_true',
+        'permission_callback' => 'fsbhoa_remote_check_api_key',
     ));
 
     // 2. Update Job Route
     register_rest_route( $namespace, '/update-job', array(
         'methods'             => 'POST',
         'callback'            => 'fsbhoa_handle_rest_update_job',
-        'permission_callback' => '__return_true',
+        'permission_callback' => 'fsbhoa_remote_check_api_key',
     ));
 
     // 3. Debug Route
@@ -285,7 +306,7 @@ add_action( 'rest_api_init', function () {
             $results = $wpdb->get_results("SELECT * FROM $table ORDER BY id DESC");
             return rest_ensure_response($results);
         },
-        'permission_callback' => '__return_true',
+        'permission_callback' => 'fsbhoa_remote_check_api_key',
     ));
 });
 
@@ -295,13 +316,8 @@ function fsbhoa_handle_rest_wait_for_job( $request ) {
         session_write_close();
     }
 
-    $valid_key = defined('FSBHOA_LIGHTING_API_KEY') ? FSBHOA_LIGHTING_API_KEY : '733KjVR4jkBGnoBEDLbC1rvCqxF7gMdz6ygbxRjCM+Y=';
-    $provided_key = $request->get_header('X-API-Key');
+    // API key is checked by fsbhoa_remote_check_api_key (permission_callback).
 
-    if ( $provided_key !== $valid_key ) {
-        return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
-    }
-    
     //  Capture the configuration "push" from the Go Service
     $public_enabled = $request->get_header('X-Public-QR-Enabled');
     if ( $public_enabled !== null ) {
@@ -360,13 +376,7 @@ function fsbhoa_handle_rest_update_job( $request ) {
         session_write_close();
     }
 
-    $valid_key = defined('FSBHOA_LIGHTING_API_KEY') ? FSBHOA_LIGHTING_API_KEY : '733KjVR4jkBGnoBEDLbC1rvCqxF7gMdz6ygbxRjCM+Y=';
-    $provided_key = $request->get_header('X-API-Key');
-
-    if ( $provided_key !== $valid_key ) {
-        error_log("fsbhoa_handle_rest_update_job() called with bad API Key.");
-        return new WP_Error( 'unauthorized', 'Invalid API Key', array( 'status' => 403 ) );
-    }
+    // API key is checked by fsbhoa_remote_check_api_key (permission_callback).
 
     // Explicitly grab params from the request object
     $job_id = $request->get_param('job_id');
