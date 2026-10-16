@@ -128,9 +128,18 @@ func FetchConfigurationFromAPI(cfg Config) (*FullConfigurationData, error) {
 	return &configData, nil
 }
 
+// isSpareOutput reports whether a mapping is an intentional spare. In the UI,
+// spare relays are entered with the output "---"; they are skipped quietly.
+func isSpareOutput(yOutput string) bool {
+	return strings.TrimSpace(yOutput) == "---"
+}
+
 // --- HELPER: calculateLoopIndex ---
 // Duplicates the logic from PulseZone to find the 0-23 index for a light
 func calculateLoopIndex(yOutput string) int {
+	if len(yOutput) < 2 {
+		return -1 // Invalid output (also avoids a slice panic on "")
+	}
 	yNum, _ := strconv.Atoi(yOutput[1:]) // e.g., 101
 	if yNum == 0 {
 		return -1 // Invalid output
@@ -276,6 +285,9 @@ func ConfigureSchedules(cfg Config, data *FullConfigurationData) error {
 			continue // Skip empty mappings
 		}
 
+		if isSpareOutput(mapping.PLCOutputs[0]) {
+			continue // Spare relays, intentionally unassigned
+		}
 		loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
 		if loopIndex == -1 {
 			log.Printf("Warning: Skipping mapping %d with invalid output '%s'", mapping.ID, mapping.PLCOutputs[0])
@@ -387,6 +399,9 @@ func PulseZone(cfg Config, configData *FullConfigurationData, zoneID int, state 
 					continue // No outputs defined
 				}
 
+				if isSpareOutput(mapping.PLCOutputs[0]) {
+					continue // Spare relays, intentionally unassigned
+				}
 				loopIndex := calculateLoopIndex(mapping.PLCOutputs[0])
 				if loopIndex == -1 {
 					log.Printf("Warning: Skipping pulse for Zone %d. Mapping %d has invalid output %s.", zoneID, mapping.ID, mapping.PLCOutputs[0])
