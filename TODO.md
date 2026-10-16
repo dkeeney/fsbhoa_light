@@ -17,7 +17,8 @@
 - [ ] Check whether `/fsbhoa-lighting/v1/verify-swipe` (`includes/api-routes.php`) is still used. The Go service calls Access Control directly.
 
 ## Production housekeeping (manual)
-- [ ] Mappings 61 and 77 have output `---` and are skipped at every push. Fix or delete them in the configuration UI.
-- [ ] Drop the empty `wp_lighting_queue` table on access.fsbhoa.com (`fsbhoa_db`). The remote plugin created it there by mistake on 2026-10-15.
 - [ ] Change the CLICK PLC login password. The old one was in this public repo's ladder files until 2026-10-15.
-- [ ] `IgnoreSolarCheck` is ON in production, so QR scans turn lights on at any time of day. Confirm that's intended.
+
+## Decided
+- Mappings 61 and 77 (output `---`) are intentional spares (relays A39–A47, B31–B32). Their "invalid output" warnings at each push are expected.
+- `IgnoreSolarCheck` stays ON in production for now, so QR scans work at any hour.
